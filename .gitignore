@@ -1,0 +1,27 @@
+# Rust
+/boot-core/target/
+boot-core/**/*.pdb
+
+# Node / Electron
+bootready-ui/node_modules/
+bootready-ui/dist/
+bootready-ui/dist-electron/
+bootready-ui/release/
+
+# SQLite
+*.db
+*.db-shm
+*.db-wal
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.user
