@@ -3,17 +3,15 @@
 // 요청: JSON 단일 행 ({"cmd":"status"} 등)
 // 응답: JSON 단일 행
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::sync::{Arc, Mutex};
 
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE};
-use windows::Win32::Storage::FileSystem::{
-    FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX,
-};
+use windows::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+use windows::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX;
 use windows::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE,
     PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
@@ -93,8 +91,11 @@ pub fn serve(db: Arc<Mutex<Database>>, state: Arc<Mutex<MonitorState>>) -> Resul
         // 클라이언트별 스레드에서 처리
         let db_clone = Arc::clone(&db);
         let state_clone = Arc::clone(&state);
+        let pipe_raw = pipe.0 as usize;
 
         std::thread::spawn(move || {
+            use windows::Win32::Foundation::HANDLE;
+            let pipe = HANDLE(pipe_raw as *mut _);
             if let Err(e) = handle_client(pipe, db_clone, state_clone) {
                 error!("pipe client error: {e}");
             }
@@ -144,8 +145,7 @@ fn handle_client(
     }
 
     // from_raw_handle로 생성된 File이 drop될 때 HANDLE을 닫으려 시도하므로
-    // 소유권 누수 방지를 위해 into_raw_handle로 회수
-    use std::os::windows::io::IntoRawHandle;
+    // 소유권 누수 방지를 위해 ManuallyDrop으로 회수
     let _ = std::mem::ManuallyDrop::new(writer_file);
 
     Ok(())

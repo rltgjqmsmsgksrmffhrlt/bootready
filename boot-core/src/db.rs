@@ -35,7 +35,7 @@ impl Database {
         }
 
         let conn = Connection::open(path).context("failed to open sqlite")?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+        conn.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA foreign_keys=ON;")?;
 
         let db = Database { conn };
         db.create_schema()?;

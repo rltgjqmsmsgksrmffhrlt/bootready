@@ -1,8 +1,9 @@
-// db-reader.ts — SQLite 읽기 전용 접근 (Electron Main Process)
+// db-reader.ts — SQLite 읽기 전용 접근 (sql.js WASM, 네이티브 컴파일 불필요)
 
 import path from 'path'
 import os from 'os'
-import type Database from 'better-sqlite3'
+import fs from 'fs'
+import type { Database } from 'sql.js'
 
 export interface BootSession {
   id: number
@@ -28,36 +29,39 @@ export interface SessionWithEvents {
 }
 
 export class DbReader {
-  private db: Database.Database | null = null
+  private db: Database | null = null
 
   async init(): Promise<void> {
     const dbPath = this.getDbPath()
+    if (!fs.existsSync(dbPath)) return
 
-    // better-sqlite3는 동기 API — require로 로드
+    // require로 로드해 vite 번들링을 우회 (Electron main = CommonJS 런타임)
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const BetterSqlite3 = require('better-sqlite3') as typeof import('better-sqlite3')
-    this.db = new BetterSqlite3(dbPath, { readonly: true, fileMustExist: false })
+    const initSqlJs = require('sql.js') as typeof import('sql.js')
+    const SQL = await initSqlJs()
+    const fileBuffer = fs.readFileSync(dbPath)
+    this.db = new SQL.Database(fileBuffer)
   }
 
   getLatestSession(): SessionWithEvents | null {
     if (!this.db) return null
-
     try {
-      const session = this.db
-        .prepare(
-          `SELECT id, started_at, completed_at, total_duration_ms, score
-           FROM boot_session ORDER BY id DESC LIMIT 1`
-        )
-        .get() as BootSession | undefined
+      const sessionResult = this.db.exec(
+        `SELECT id, started_at, completed_at, total_duration_ms, score
+         FROM boot_session ORDER BY id DESC LIMIT 1`
+      )
+      if (!sessionResult.length || !sessionResult[0].values.length) return null
 
-      if (!session) return null
+      const session = toObject<BootSession>(sessionResult[0])
 
-      const events = this.db
-        .prepare(
-          `SELECT id, session_id, name, exe_path, start_ms, end_ms, status
-           FROM program_event WHERE session_id = ? ORDER BY start_ms ASC`
-        )
-        .all(session.id) as ProgramEvent[]
+      const stmt = this.db.prepare(
+        `SELECT id, session_id, name, exe_path, start_ms, end_ms, status
+         FROM program_event WHERE session_id = ? ORDER BY start_ms ASC`
+      )
+      stmt.bind([session.id])
+      const events: ProgramEvent[] = []
+      while (stmt.step()) events.push(stmt.getAsObject() as ProgramEvent)
+      stmt.free()
 
       return { session, events }
     } catch (e) {
@@ -68,14 +72,16 @@ export class DbReader {
 
   getRecentSessions(limit = 10): BootSession[] {
     if (!this.db) return []
-
     try {
-      return this.db
-        .prepare(
-          `SELECT id, started_at, completed_at, total_duration_ms, score
-           FROM boot_session ORDER BY id DESC LIMIT ?`
-        )
-        .all(limit) as BootSession[]
+      const stmt = this.db.prepare(
+        `SELECT id, started_at, completed_at, total_duration_ms, score
+         FROM boot_session ORDER BY id DESC LIMIT ?`
+      )
+      stmt.bind([limit])
+      const rows: BootSession[] = []
+      while (stmt.step()) rows.push(stmt.getAsObject() as BootSession)
+      stmt.free()
+      return rows
     } catch {
       return []
     }
@@ -86,3 +92,11 @@ export class DbReader {
     return path.join(appdata, 'BootReady', 'data.db')
   }
 }
+
+function toObject<T>(result: { columns: string[]; values: SqlValue[][] }): T {
+  const obj: Record<string, SqlValue> = {}
+  result.columns.forEach((col, i) => { obj[col] = result.values[0][i] })
+  return obj as T
+}
+
+type SqlValue = string | number | null | Uint8Array

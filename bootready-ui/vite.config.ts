@@ -10,9 +10,15 @@ export default defineConfig({
     electron([
       {
         entry: 'electron/main/index.ts',
+        onstart(options) {
+          options.startup()
+        },
         vite: {
           build: {
             outDir: 'dist-electron/main',
+            rollupOptions: {
+              external: ['sql.js'],
+            },
           },
         },
       },
