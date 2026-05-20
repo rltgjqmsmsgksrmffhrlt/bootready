@@ -1,11 +1,17 @@
-// tray.rs — Windows 시스템 트레이 아이콘 제어
-// Shell_NotifyIcon API를 사용해 트레이 아이콘을 등록/업데이트합니다.
+// tray.rs — Windows 시스템 트레이 아이콘 제어 (Finalist B: Ring + Dot)
+//
+// 부팅 전체 흐름 (idle = Sweep · 정적):
+//   1) boot-core 시작 직후      → 회색 트랙만 (0% 진행)
+//   2) 시작프로그램이 하나씩 완료 → 회색 트랙 + 12시 시작 결정형 호가 시계방향으로 자람
+//   3) 모두 완료                 → 초록 닫힌 링 + 중앙 점 (그리고 그 상태로 유지)
+//
+// 회전·펄스 같은 산만한 모션 없음. 렌더는 진행률·상태가 바뀐 프레임에서만 일어남.
 
 use anyhow::{Context, Result};
 use log::{error, info};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
@@ -15,7 +21,8 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
+    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
+    NOTIFYICONDATAW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateIconIndirect, CreateWindowExW, DefWindowProcW, DestroyIcon, DispatchMessageW,
@@ -31,14 +38,26 @@ const WM_TRAYICON: u32 = WM_APP + 1;
 const TRAY_ID: u32 = 1;
 const WINDOW_CLASS: &str = "BootReadyTray\0";
 
+// 폴링 틱. watcher.rs가 500ms마다 상태를 갱신하므로 그에 맞춰서.
+const POLL_TICK_MS: u64 = 250;
+
+// 색상 (RGB)
+const COLOR_ACCENT: (u8, u8, u8) = (0x1d, 0x9e, 0x75); // #1d9e75 (앱 액센트)
+const COLOR_ARC_IDLE: (u8, u8, u8) = (0xb0, 0xb0, 0xb0); // 회색 진행 호
+const COLOR_TRACK: (u8, u8, u8) = (0x70, 0x70, 0x70); // 회색 트랙
+const TRACK_ALPHA: f32 = 0.38; // 트랙 흐림 정도
+
+// 링 지오메트리 (16×16 캔버스)
+const RING_R: f32 = 6.6;
+const RING_STROKE: f32 = 1.8;
+const DOT_R: f32 = 1.7;
+
 // 전역 상태 (WndProc 콜백에서 접근)
 static STATE: once_cell::sync::OnceCell<Arc<Mutex<MonitorState>>> =
     once_cell::sync::OnceCell::new();
 
 pub struct TrayApp {
     hwnd: HWND,
-    icon_waiting: HICON,
-    icon_ready: HICON,
 }
 
 impl TrayApp {
@@ -46,56 +65,19 @@ impl TrayApp {
         STATE.set(state).ok();
 
         let hinstance = unsafe { GetModuleHandleW(None)? };
-
-        // 아이콘 생성 (원형, 알파 안티앨리어싱)
-        let icon_waiting = create_circle_icon(0x00888888, false)?; // 회색 (대기 중)
-        let icon_ready   = create_circle_icon(0x0016C653, true)?;  // 초록 (완료, 내부 하이라이트)
-
-        // 숨겨진 메시지 전용 창 생성
         let hwnd = create_message_window(hinstance.into())?;
         info!("tray message window created");
 
-        // 트레이에 대기 아이콘 추가 (아직 완료 전이므로 숨김)
-        // 완료 후 show_ready()가 호출될 때 표시
-        let app = TrayApp {
-            hwnd,
-            icon_waiting,
-            icon_ready,
-        };
-
-        Ok(app)
+        Ok(TrayApp { hwnd })
     }
 
     pub fn run(self) -> Result<()> {
-        let hwnd = self.hwnd;
-        let icon_ready = self.icon_ready;
+        let hwnd_raw = self.hwnd.0 as usize;
 
-        // HWND/HICON are raw pointers — send as usize across thread boundary
-        let hwnd_raw = hwnd.0 as usize;
-        let icon_ready_raw = icon_ready.0 as usize;
-
-        // 완료 감지 후 아이콘 전환을 위한 백그라운드 스레드
+        // 아이콘 업데이트 스레드 — 진행률·상태에 따라 100ms마다 다시 그림
         thread::spawn(move || {
             let hwnd = HWND(hwnd_raw as *mut _);
-            let icon_ready = HICON(icon_ready_raw as *mut _);
-            loop {
-                thread::sleep(Duration::from_millis(500));
-
-                let is_complete = STATE
-                    .get()
-                    .and_then(|s| s.lock().ok())
-                    .map(|s| s.is_complete)
-                    .unwrap_or(false);
-
-                if is_complete {
-                    // 트레이에 완료 아이콘 추가
-                    unsafe {
-                        add_tray_icon(hwnd, icon_ready, "BootReady — 부팅 완료");
-                    }
-                    info!("tray icon shown (ready)");
-                    break;
-                }
-            }
+            run_icon_updater(hwnd);
         });
 
         // Windows 메시지 펌프
@@ -105,16 +87,106 @@ impl TrayApp {
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
-        }
 
-        // 앱 종료 시 트레이 아이콘 제거
-        unsafe {
-            remove_tray_icon(hwnd);
-            DestroyIcon(self.icon_waiting).ok();
-            DestroyIcon(self.icon_ready).ok();
+            remove_tray_icon(self.hwnd);
         }
 
         Ok(())
+    }
+}
+
+/// 트레이 아이콘 업데이트 루프 (별도 스레드)
+fn run_icon_updater(hwnd: HWND) {
+    let start = Instant::now();
+    let mut tray_added = false;
+    let mut current_icon: Option<HICON> = None;
+
+    // 마지막으로 렌더한 상태 — 같은 상태면 재생성 생략
+    let mut last_progress = -1.0f32;
+    let mut last_ready = false;
+
+    // 시작프로그램이 0개이면 일정 시간 후 즉시 ready 상태로 전환
+    const NO_PROGRAMS_FALLBACK_SECS: u64 = 3;
+
+    loop {
+        thread::sleep(Duration::from_millis(POLL_TICK_MS));
+
+        let (active, total, is_complete) = match STATE.get().and_then(|s| s.lock().ok()) {
+            Some(s) => (s.active_programs, s.total_programs, s.is_complete),
+            None => continue,
+        };
+
+        let elapsed = start.elapsed();
+        let total_resolved = total > 0
+            || elapsed.as_secs() >= NO_PROGRAMS_FALLBACK_SECS;
+
+        let progress = if total == 0 {
+            0.0
+        } else {
+            (active as f32 / total as f32).clamp(0.0, 1.0)
+        };
+
+        // ready = 명시적 완료 OR 시작프로그램이 0개이고 fallback 시간이 지남
+        let ready = is_complete || (total == 0 && total_resolved);
+
+        // 재렌더 여부 판단 — 상태/진행률 변화가 있을 때만
+        let needs_redraw = !tray_added
+            || ready != last_ready
+            || (progress - last_progress).abs() > 0.001;
+
+        if !needs_redraw {
+            continue;
+        }
+
+        let icon = match create_ring_icon(progress, ready) {
+            Ok(i) => i,
+            Err(e) => {
+                error!("failed to create ring icon: {e}");
+                continue;
+            }
+        };
+
+        let tip = build_tip(active, total, is_complete);
+
+        unsafe {
+            if !tray_added {
+                add_tray_icon(hwnd, icon, &tip);
+                tray_added = true;
+                info!("tray icon added (progress={:.0}%)", progress * 100.0);
+            } else {
+                modify_tray_icon(hwnd, icon, &tip);
+            }
+        }
+
+        // 이전 아이콘 폐기
+        if let Some(old) = current_icon.take() {
+            unsafe {
+                DestroyIcon(old).ok();
+            }
+        }
+        current_icon = Some(icon);
+
+        last_progress = progress;
+        last_ready = ready;
+
+        // 완료 후엔 더 이상 갱신할 게 없음 — 스레드만 가볍게 idle 상태로 유지
+        if ready {
+            info!("tray icon settled to ready state");
+            // 더 이상 폴링하지 않고 길게 잠. (메시지 펌프가 종료시 트레이 정리)
+            loop {
+                thread::sleep(Duration::from_secs(60));
+            }
+        }
+    }
+}
+
+fn build_tip(active: usize, total: usize, is_complete: bool) -> String {
+    if is_complete {
+        "BootReady — 부팅 완료".to_string()
+    } else if total == 0 {
+        "BootReady — 시작프로그램 없음".to_string()
+    } else {
+        format!("BootReady — {}/{} 프로그램 시작됨", active, total)
     }
 }
 
@@ -128,12 +200,12 @@ unsafe extern "system" fn wnd_proc(
         WM_TRAYICON => {
             let event = lparam.0 as u32 & 0xFFFF;
             match event {
-                // 왼쪽 클릭 또는 더블클릭 → bootready-ui.exe 실행
                 WM_LBUTTONDOWN | 0x0203 /* WM_LBUTTONDBLCLK */ => {
                     launch_ui();
                 }
-                // 오른쪽 클릭 → 컨텍스트 메뉴 (미구현, 추후 추가)
-                WM_RBUTTONDOWN => {}
+                WM_RBUTTONDOWN => {
+                    // 컨텍스트 메뉴는 추후 구현
+                }
                 _ => {}
             }
             LRESULT(0)
@@ -152,28 +224,19 @@ fn launch_ui() {
     info!("launching UI: {:?}", ui_exe);
 
     if let Some(path) = ui_exe {
-        std::process::Command::new(path)
+        let _ = std::process::Command::new(path)
             .spawn()
-            .unwrap_or_else(|e| {
-                error!("failed to launch bootready-ui: {e}");
-                // 폴백: 없으면 조용히 무시
-                unsafe { std::mem::zeroed() }
-            });
+            .map_err(|e| error!("failed to launch bootready-ui: {e}"));
     }
 }
 
 fn find_ui_exe() -> Option<std::path::PathBuf> {
-    // 1. 동일 디렉터리에서 탐색
     if let Ok(current_exe) = std::env::current_exe() {
-        let sibling = current_exe
-            .parent()?
-            .join("bootready-ui.exe");
+        let sibling = current_exe.parent()?.join("bootready-ui.exe");
         if sibling.exists() {
             return Some(sibling);
         }
     }
-
-    // 2. 환경변수 PATH 탐색
     which_bootready_ui()
 }
 
@@ -187,11 +250,7 @@ fn which_bootready_ui() -> Option<std::path::PathBuf> {
 }
 
 unsafe fn add_tray_icon(hwnd: HWND, icon: HICON, tip: &str) {
-    let mut tip_buf = [0u16; 128];
-    for (i, c) in tip.encode_utf16().enumerate().take(127) {
-        tip_buf[i] = c;
-    }
-
+    let tip_buf = encode_tip(tip);
     let mut nid = NOTIFYICONDATAW {
         cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
         hWnd: hwnd,
@@ -202,8 +261,22 @@ unsafe fn add_tray_icon(hwnd: HWND, icon: HICON, tip: &str) {
         szTip: tip_buf,
         ..Default::default()
     };
-
     Shell_NotifyIconW(NIM_ADD, &mut nid);
+}
+
+unsafe fn modify_tray_icon(hwnd: HWND, icon: HICON, tip: &str) {
+    let tip_buf = encode_tip(tip);
+    let mut nid = NOTIFYICONDATAW {
+        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: hwnd,
+        uID: TRAY_ID,
+        uFlags: NIF_ICON | NIF_MESSAGE | NIF_TIP,
+        uCallbackMessage: WM_TRAYICON,
+        hIcon: icon,
+        szTip: tip_buf,
+        ..Default::default()
+    };
+    Shell_NotifyIconW(NIM_MODIFY, &mut nid);
 }
 
 unsafe fn remove_tray_icon(hwnd: HWND) {
@@ -216,96 +289,172 @@ unsafe fn remove_tray_icon(hwnd: HWND) {
     Shell_NotifyIconW(NIM_DELETE, &mut nid);
 }
 
-/// 안티앨리어싱 원형 아이콘 생성 (32bpp BGRA, 알파 채널)
-/// highlight=true 이면 상단에 밝은 하이라이트를 추가해 입체감을 냄
-fn create_circle_icon(color_bgr: u32, highlight: bool) -> Result<HICON> {
+fn encode_tip(tip: &str) -> [u16; 128] {
+    let mut buf = [0u16; 128];
+    for (i, c) in tip.encode_utf16().enumerate().take(127) {
+        buf[i] = c;
+    }
+    buf
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// 아이콘 렌더링
+// ──────────────────────────────────────────────────────────────────────────
+
+/// Ring + Dot 아이콘 생성.
+/// - `progress`: 0..1, 회색 진행 호의 길이 (12시 시작, 시계방향)
+/// - `ready`:    true이면 초록 닫힌 링 + 중앙 점
+fn create_ring_icon(progress: f32, ready: bool) -> Result<HICON> {
     const SIZE: i32 = 16;
     const SZ: usize = SIZE as usize;
 
-    let b0 = (color_bgr & 0xFF) as f32;
-    let g0 = ((color_bgr >> 8) & 0xFF) as f32;
-    let r0 = ((color_bgr >> 16) & 0xFF) as f32;
+    let (arc_color, track_alpha_max, has_dot, has_track) = if ready {
+        (COLOR_ACCENT, 0.0, true, false)
+    } else {
+        (COLOR_ARC_IDLE, TRACK_ALPHA, false, true)
+    };
 
+    // ready면 닫힌 링(100%), 그 외엔 실제 진행률
+    let effective_progress = if ready { 1.0 } else { progress };
+
+    let inner_r = RING_R - RING_STROKE / 2.0;
+    let outer_r = RING_R + RING_STROKE / 2.0;
     let center = (SZ as f32 - 1.0) / 2.0;
-    let outer_r = center - 0.3; // 외곽 반지름 (0.3px 여백)
+    // 한 픽셀이 차지하는 각도(0..1 비율). 호의 시작/끝을 부드럽게 깎는 데 사용.
+    let angular_pixel = 1.0 / (2.0 * std::f32::consts::PI * RING_R);
 
-    // BGRA 픽셀 버퍼 (pre-multiplied alpha)
     let mut pixels = vec![0u32; SZ * SZ];
+
     for y in 0..SZ {
         for x in 0..SZ {
             let dx = x as f32 - center;
             let dy = y as f32 - center;
             let dist = (dx * dx + dy * dy).sqrt();
 
-            // 부드러운 원 경계 (1px 안티앨리어싱)
-            let alpha = ((outer_r + 0.5 - dist).clamp(0.0, 1.0) * 255.0) as u32;
-            if alpha == 0 {
+            // 중앙 점 (ready 상태 한정)
+            if has_dot {
+                let dot_a = (DOT_R + 0.5 - dist).clamp(0.0, 1.0);
+                if dot_a > 0.0 {
+                    pixels[y * SZ + x] = pack_bgra(arc_color, dot_a);
+                    continue;
+                }
+            }
+
+            // 링 밴드 반경 안티앨리어싱: 안쪽/바깥쪽 둘 다 1px 깃털
+            let band_a = (outer_r + 0.5 - dist)
+                .min(dist - inner_r + 0.5)
+                .clamp(0.0, 1.0);
+            if band_a <= 0.0 {
                 continue;
             }
 
-            // 상단 하이라이트: 약간 밝게
-            let hl = if highlight && dy < 0.0 {
-                1.0 + 0.35 * (-dy / (outer_r + 1.0)).min(1.0)
-            } else {
-                1.0f32
-            };
+            // 12시 기준, 시계 방향 각도 (0..1)
+            let raw = dx.atan2(-dy); // [-π, π], 12시=0, 3시=π/2, 6시=π, 9시=-π/2
+            let mut t = raw / (2.0 * std::f32::consts::PI);
+            if t < 0.0 {
+                t += 1.0;
+            }
 
-            let b = ((b0 * hl).min(255.0) * alpha as f32 / 255.0) as u32;
-            let g = ((g0 * hl).min(255.0) * alpha as f32 / 255.0) as u32;
-            let r = ((r0 * hl).min(255.0) * alpha as f32 / 255.0) as u32;
+            // 호 안에 있는지 — 끝 모서리만 1픽셀 폭으로 스무딩 (12시 시작은 자연 경계)
+            let arc_factor = smoothstep(0.0, angular_pixel, effective_progress - t);
+            let arc_a = band_a * arc_factor;
 
-            // 메모리 순서: B G R A (little-endian u32 = 0xAARRGGBB)
-            pixels[y * SZ + x] = b | (g << 8) | (r << 16) | (alpha << 24);
+            // 트랙 (회색)
+            let track_a = if has_track { band_a * track_alpha_max } else { 0.0 };
+
+            // 호를 트랙 위에 합성 (over operator, pre-multiplied)
+            let one_minus_arc = 1.0 - arc_a;
+            let final_a = arc_a + track_a * one_minus_arc;
+            if final_a <= 0.0 {
+                continue;
+            }
+
+            // pre-multiplied 색상
+            let r = arc_color.0 as f32 * arc_a + COLOR_TRACK.0 as f32 * track_a * one_minus_arc;
+            let g = arc_color.1 as f32 * arc_a + COLOR_TRACK.1 as f32 * track_a * one_minus_arc;
+            let b = arc_color.2 as f32 * arc_a + COLOR_TRACK.2 as f32 * track_a * one_minus_arc;
+
+            let pa = (final_a * 255.0).min(255.0) as u32;
+            let pr = r.min(255.0) as u32;
+            let pg = g.min(255.0) as u32;
+            let pb = b.min(255.0) as u32;
+            // 메모리: B G R A (little-endian u32 = 0xAARRGGBB)
+            pixels[y * SZ + x] = pb | (pg << 8) | (pr << 16) | (pa << 24);
         }
     }
 
-    unsafe {
-        let dc = CreateCompatibleDC(None);
+    unsafe { build_hicon_from_pixels(&pixels, SIZE) }
+}
 
-        let bmi = BITMAPINFO {
-            bmiHeader: BITMAPINFOHEADER {
-                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: SIZE,
-                biHeight: -SIZE, // top-down
-                biPlanes: 1,
-                biBitCount: 32,
-                biCompression: 0, // BI_RGB
-                ..Default::default()
-            },
+#[inline]
+fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+    if x <= edge0 {
+        return 0.0;
+    }
+    if x >= edge1 {
+        return 1.0;
+    }
+    let t = (x - edge0) / (edge1 - edge0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+#[inline]
+fn pack_bgra(rgb: (u8, u8, u8), alpha: f32) -> u32 {
+    let a = (alpha * 255.0).min(255.0) as u32;
+    let r = (rgb.0 as f32 * alpha).min(255.0) as u32;
+    let g = (rgb.1 as f32 * alpha).min(255.0) as u32;
+    let b = (rgb.2 as f32 * alpha).min(255.0) as u32;
+    b | (g << 8) | (r << 16) | (a << 24)
+}
+
+/// 32bpp BGRA 픽셀 버퍼로부터 HICON 생성
+unsafe fn build_hicon_from_pixels(pixels: &[u32], size: i32) -> Result<HICON> {
+    let sz = size as usize;
+
+    let dc = CreateCompatibleDC(None);
+
+    let bmi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: size,
+            biHeight: -size, // top-down
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: 0, // BI_RGB
             ..Default::default()
-        };
+        },
+        ..Default::default()
+    };
 
-        let mut bits_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
-        let color_bmp = CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &mut bits_ptr, None, 0)
-            .context("CreateDIBSection failed")?;
+    let mut bits_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
+    let color_bmp = CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &mut bits_ptr, None, 0)
+        .context("CreateDIBSection failed")?;
 
-        std::slice::from_raw_parts_mut(bits_ptr as *mut u32, SZ * SZ)
-            .copy_from_slice(&pixels);
+    std::slice::from_raw_parts_mut(bits_ptr as *mut u32, sz * sz).copy_from_slice(pixels);
 
-        DeleteDC(dc);
+    DeleteDC(dc);
 
-        // 1-bit 마스크: 전부 0 → color bitmap 알파를 그대로 사용
-        let mask_bytes = vec![0u8; SZ * 4]; // 행당 DWORD 정렬 (16px → 4바이트)
-        let mask_bmp = CreateBitmap(SIZE, SIZE, 1, 1, Some(mask_bytes.as_ptr() as *const _));
-        if mask_bmp.is_invalid() {
-            DeleteObject(color_bmp);
-            return Err(anyhow::anyhow!("CreateBitmap mask failed"));
-        }
-
-        let icon = CreateIconIndirect(&ICONINFO {
-            fIcon: true.into(),
-            xHotspot: 0,
-            yHotspot: 0,
-            hbmMask: mask_bmp,
-            hbmColor: color_bmp,
-        })
-        .context("CreateIconIndirect failed")?;
-
+    // 1-bit 마스크: 전부 0 → color bitmap 알파 채널을 그대로 사용
+    let mask_bytes = vec![0u8; sz * 4]; // DWORD 정렬 (16px → 4바이트/행)
+    let mask_bmp = CreateBitmap(size, size, 1, 1, Some(mask_bytes.as_ptr() as *const _));
+    if mask_bmp.is_invalid() {
         DeleteObject(color_bmp);
-        DeleteObject(mask_bmp);
-
-        Ok(icon)
+        return Err(anyhow::anyhow!("CreateBitmap mask failed"));
     }
+
+    let icon = CreateIconIndirect(&ICONINFO {
+        fIcon: true.into(),
+        xHotspot: 0,
+        yHotspot: 0,
+        hbmMask: mask_bmp,
+        hbmColor: color_bmp,
+    })
+    .context("CreateIconIndirect failed")?;
+
+    DeleteObject(color_bmp);
+    DeleteObject(mask_bmp);
+
+    Ok(icon)
 }
 
 fn create_message_window(hinstance: HINSTANCE) -> Result<HWND> {
