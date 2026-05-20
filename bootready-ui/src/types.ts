@@ -39,6 +39,8 @@ declare global {
       closeWindow: () => void
       openTimeline: () => void
       onNavigate: (cb: (route: string) => void) => void
+      getFileIcon: (exePath: string) => Promise<string | null>
+      setWindowHeight: (h: number) => Promise<void>
     }
   }
 }

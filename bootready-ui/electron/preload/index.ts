@@ -9,4 +9,6 @@ contextBridge.exposeInMainWorld('api', {
   openTimeline: () => ipcRenderer.invoke('open-timeline'),
   onNavigate: (cb: (route: string) => void) =>
     ipcRenderer.on('navigate', (_e, route) => cb(route)),
+  getFileIcon: (exePath: string) => ipcRenderer.invoke('get-file-icon', exePath),
+  setWindowHeight: (h: number) => ipcRenderer.invoke('set-window-height', h),
 })

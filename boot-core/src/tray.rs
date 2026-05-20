@@ -220,13 +220,30 @@ unsafe extern "system" fn wnd_proc(
 }
 
 fn launch_ui() {
-    let ui_exe = find_ui_exe();
-    info!("launching UI: {:?}", ui_exe);
+    // 신호 파일 방식: Electron이 감지하면 창을 표시
+    write_show_signal();
 
-    if let Some(path) = ui_exe {
+    // exe가 있으면 새 프로세스로 실행 (설치본)
+    if let Some(path) = find_ui_exe() {
+        info!("launching UI exe: {:?}", path);
         let _ = std::process::Command::new(path)
             .spawn()
             .map_err(|e| error!("failed to launch bootready-ui: {e}"));
+    }
+}
+
+fn write_show_signal() {
+    let appdata = match std::env::var("APPDATA") {
+        Ok(v) => std::path::PathBuf::from(v),
+        Err(_) => return,
+    };
+    let dir = appdata.join("BootReady");
+    let _ = std::fs::create_dir_all(&dir);
+    let signal = dir.join("show.signal");
+    if let Err(e) = std::fs::write(&signal, b"show") {
+        error!("failed to write show signal: {e}");
+    } else {
+        info!("show signal written");
     }
 }
 
@@ -308,13 +325,13 @@ fn create_ring_icon(progress: f32, ready: bool) -> Result<HICON> {
     const SIZE: i32 = 16;
     const SZ: usize = SIZE as usize;
 
-    let (arc_color, track_alpha_max, has_dot, has_track) = if ready {
-        (COLOR_ACCENT, 0.0, true, false)
+    let (arc_color, has_dot, has_track) = if ready {
+        (COLOR_ACCENT, true, false)
     } else {
-        (COLOR_ARC_IDLE, TRACK_ALPHA, false, true)
+        (COLOR_ARC_IDLE, false, true)
     };
 
-    // ready면 닫힌 링(100%), 그 외엔 실제 진행률
+    // 완료 시 닫힌 원(100%), 진행 중엔 실제 진행률
     let effective_progress = if ready { 1.0 } else { progress };
 
     let inner_r = RING_R - RING_STROKE / 2.0;
@@ -359,8 +376,8 @@ fn create_ring_icon(progress: f32, ready: bool) -> Result<HICON> {
             let arc_factor = smoothstep(0.0, angular_pixel, effective_progress - t);
             let arc_a = band_a * arc_factor;
 
-            // 트랙 (회색)
-            let track_a = if has_track { band_a * track_alpha_max } else { 0.0 };
+            // 트랙 (회색, 진행 중에만)
+            let track_a = if has_track { band_a * TRACK_ALPHA } else { 0.0 };
 
             // 호를 트랙 위에 합성 (over operator, pre-multiplied)
             let one_minus_arc = 1.0 - arc_a;

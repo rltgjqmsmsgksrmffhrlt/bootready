@@ -1,5 +1,8 @@
-import { app, BrowserWindow, ipcMain, screen } from 'electron'
+import { app, BrowserWindow, ipcMain, screen, Tray, nativeImage } from 'electron'
 import path from 'path'
+import fs from 'fs'
+import os from 'os'
+import crypto from 'crypto'
 import { IpcClient } from './ipc-client'
 import { DbReader } from './db-reader'
 
@@ -8,18 +11,39 @@ const DIST = path.join(__dirname, '../../dist')
 const DIST_ELECTRON = path.join(__dirname, '../')
 
 let win: BrowserWindow | null = null
+let tray: Tray | null = null
 let ipcClient: IpcClient | null = null
 let dbReader: DbReader | null = null
 
-async function createWindow() {
-  // 화면 오른쪽 하단 (트레이 근처)에 팝업 배치
+// 메모리 캐시
+const iconMemCache = new Map<string, string>()
+
+function getIconCacheDir(): string {
+  const appdata = process.env.APPDATA ?? path.join(os.homedir(), 'AppData', 'Roaming')
+  return path.join(appdata, 'BootReady', 'icons')
+}
+
+function getWindowPos(): { x: number; y: number } {
   const { workAreaSize } = screen.getPrimaryDisplay()
+  const WIN_W = 360
+  const WIN_H = 480
+  const OFFSET = 20
+  return {
+    x: workAreaSize.width - WIN_W - OFFSET,
+    y: workAreaSize.height - WIN_H - OFFSET,
+  }
+}
+
+async function createWindow() {
+  const pos = getWindowPos()
 
   win = new BrowserWindow({
-    width: 420,
-    height: 560,
-    x: workAreaSize.width - 440,
-    y: workAreaSize.height - 580,
+    width: 360,
+    height: 480,
+    minHeight: 280,
+    maxHeight: 480,
+    x: pos.x,
+    y: pos.y,
     frame: false,
     resizable: false,
     alwaysOnTop: true,
@@ -46,11 +70,9 @@ async function createWindow() {
     win?.focus()
   })
 
-  // 포커스 잃으면 닫기
+  // 포커스 잃으면 숨기기 (close 아님 — tray 클릭으로 다시 표시 가능)
   win.on('blur', () => {
-    if (!process.env.VITE_DEV_SERVER_URL) {
-      win?.close()
-    }
+    win?.hide()
   })
 
   win.on('closed', () => {
@@ -99,11 +121,94 @@ function registerIpcHandlers() {
   })
 
   ipcMain.handle('close-window', () => {
-    win?.close()
+    win?.hide()
   })
 
   ipcMain.handle('open-timeline', () => {
     win?.webContents.send('navigate', '/timeline')
+  })
+
+  ipcMain.handle('set-window-height', (_e, h: number) => {
+    if (!win) return
+    const clamped = Math.max(280, Math.min(480, h))
+    win.setContentSize(360, clamped)
+  })
+
+  ipcMain.handle('get-file-icon', async (_e, exePath: string) => {
+    if (!exePath) return null
+
+    // 메모리 캐시 확인
+    if (iconMemCache.has(exePath)) {
+      return iconMemCache.get(exePath) ?? null
+    }
+
+    // 디스크 캐시 확인
+    const hash = crypto.createHash('md5').update(exePath).digest('hex')
+    const cacheDir = getIconCacheDir()
+    const cachePath = path.join(cacheDir, `${hash}.png`)
+
+    if (fs.existsSync(cachePath)) {
+      try {
+        const buf = fs.readFileSync(cachePath)
+        const dataUrl = `data:image/png;base64,${buf.toString('base64')}`
+        iconMemCache.set(exePath, dataUrl)
+        return dataUrl
+      } catch {
+        // 캐시 읽기 실패 시 새로 추출
+      }
+    }
+
+    // app.getFileIcon 호출
+    try {
+      const icon = await app.getFileIcon(exePath, { size: 'normal' })
+      if (icon.isEmpty()) return null
+
+      const pngBuf = icon.toPNG()
+      const dataUrl = `data:image/png;base64,${pngBuf.toString('base64')}`
+
+      // 디스크 캐시 저장
+      try {
+        fs.mkdirSync(cacheDir, { recursive: true })
+        fs.writeFileSync(cachePath, pngBuf)
+      } catch {
+        // 캐시 저장 실패는 무시
+      }
+
+      iconMemCache.set(exePath, dataUrl)
+      return dataUrl
+    } catch {
+      return null
+    }
+  })
+}
+
+function showWindow() {
+  if (!win) { createWindow(); return }
+  const pos = getWindowPos()
+  win.setPosition(pos.x, pos.y)
+  win.show()
+  win.focus()
+}
+
+function watchShowSignal() {
+  const appdata = process.env.APPDATA ?? path.join(os.homedir(), 'AppData', 'Roaming')
+  const signalPath = path.join(appdata, 'BootReady', 'show.signal')
+  setInterval(() => {
+    if (fs.existsSync(signalPath)) {
+      try { fs.unlinkSync(signalPath) } catch { return }
+      showWindow()
+    }
+  }, 200)
+}
+
+function createTray() {
+  // 16×16 투명 아이콘 (boot-core가 별도 트레이 아이콘을 그리므로 여기선 최소 크기)
+  const icon = nativeImage.createEmpty()
+  tray = new Tray(icon)
+  tray.setToolTip('BootReady')
+
+  tray.on('click', () => {
+    if (win?.isVisible()) { win.hide() } else { showWindow() }
   })
 }
 
@@ -126,10 +231,15 @@ app.whenReady().then(async () => {
   }
 
   registerIpcHandlers()
+  createTray()
+  watchShowSignal()
   await createWindow()
 })
 
+// hide 방식이라 window-all-closed는 발생하지 않음 — tray 우클릭 메뉴로 종료
 app.on('window-all-closed', () => {
+  // macOS 외엔 tray가 살아있으므로 quit 하지 않음
+  if (process.platform !== 'darwin') return
   ipcClient?.disconnect()
   app.quit()
 })

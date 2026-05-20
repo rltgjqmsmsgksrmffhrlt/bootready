@@ -60,7 +60,7 @@ export class DbReader {
       )
       stmt.bind([session.id])
       const events: ProgramEvent[] = []
-      while (stmt.step()) events.push(stmt.getAsObject() as ProgramEvent)
+      while (stmt.step()) events.push(stmt.getAsObject() as unknown as ProgramEvent)
       stmt.free()
 
       return { session, events }
@@ -79,7 +79,7 @@ export class DbReader {
       )
       stmt.bind([limit])
       const rows: BootSession[] = []
-      while (stmt.step()) rows.push(stmt.getAsObject() as BootSession)
+      while (stmt.step()) rows.push(stmt.getAsObject() as unknown as BootSession)
       stmt.free()
       return rows
     } catch {

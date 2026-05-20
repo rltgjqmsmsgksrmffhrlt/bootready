@@ -9,7 +9,11 @@ interface Props {
 
 export default function Timeline({ sessionData, onBack }: Props) {
   const events = sessionData?.events ?? []
-  const totalMs = sessionData?.session?.total_duration_ms ?? 1
+  const totalMs = useMemo(() => {
+    if (sessionData?.session?.total_duration_ms) return sessionData.session.total_duration_ms
+    const maxEnd = Math.max(0, ...events.map(e => e.end_ms ?? e.start_ms ?? 0))
+    return maxEnd > 0 ? maxEnd * 1.1 : 30_000
+  }, [sessionData, events])
 
   // 간트차트용 정렬 및 정규화
   const rows = useMemo(() => {
