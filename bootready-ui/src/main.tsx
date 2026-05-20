@@ -25,9 +25,17 @@ if (!window.api) {
     getLatestSession: () => Promise.resolve(mockSession),
     getBootStatus: () => Promise.resolve({ is_complete: true, total_programs: 5, active_programs: 5, total_ms: 47200, score: 82 }),
     getRecentSessions: () => Promise.resolve([mockSession.session]),
+    getSessionById: () => Promise.resolve(mockSession),
     closeWindow: () => {},
     openTimeline: () => {},
     onNavigate: () => {},
+    onSessionUpdated: () => {},
+    getAutostart: () => Promise.resolve(true),
+    setAutostart: () => Promise.resolve(true),
+    saveConfig: () => Promise.resolve(true),
+    loadConfig: () => Promise.resolve(null),
+    getFileIcon: () => Promise.resolve(null),
+    setWindowHeight: () => Promise.resolve(),
   }
 }
 

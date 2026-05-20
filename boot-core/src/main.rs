@@ -18,6 +18,11 @@ use crate::tray::TrayApp;
 use crate::watcher::{MonitorState, StartupWatcher};
 
 fn main() -> Result<()> {
+    // 단일 인스턴스 보장
+    if !acquire_single_instance() {
+        return Ok(()); // 이미 실행 중 — 조용히 종료
+    }
+
     // 로거 초기화 (릴리스 빌드에서는 파일 로그)
     #[cfg(debug_assertions)]
     env_logger::init();
@@ -87,6 +92,22 @@ fn init_file_logger() {
         .target(env_logger::Target::Pipe(Box::new(file)))
         .filter_level(log::LevelFilter::Info)
         .init();
+}
+
+fn acquire_single_instance() -> bool {
+    use windows::core::PCWSTR;
+    use windows::Win32::System::Threading::CreateMutexW;
+    use windows::Win32::Foundation::ERROR_ALREADY_EXISTS;
+
+    let name: Vec<u16> = "Global\\BootReadyMutex\0".encode_utf16().collect();
+    let result = unsafe { CreateMutexW(None, true, PCWSTR(name.as_ptr())) };
+    match result {
+        Ok(_) => {
+            let err = unsafe { windows::Win32::Foundation::GetLastError() };
+            err != ERROR_ALREADY_EXISTS
+        }
+        Err(_) => false,
+    }
 }
 
 fn dirs_or_fallback() -> std::path::PathBuf {

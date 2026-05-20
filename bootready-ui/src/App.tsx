@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react'
 import TrayPopup from './components/TrayPopup'
 import Timeline from './components/Timeline'
 import Settings from './components/Settings'
+import History from './components/History'
 import type { SessionWithEvents } from './types'
 
-type Route = 'popup' | 'timeline' | 'settings'
+type Route = 'popup' | 'timeline' | 'settings' | 'history'
 
 export default function App() {
   const [route, setRoute] = useState<Route>('popup')
@@ -14,12 +15,14 @@ export default function App() {
   useEffect(() => {
     loadData()
 
-    // Electron Main에서 navigate 이벤트 수신
     window.api?.onNavigate?.((r) => {
       if (r === '/timeline') setRoute('timeline')
       else if (r === '/settings') setRoute('settings')
       else setRoute('popup')
     })
+
+    // 세션 완료 시 자동 갱신
+    window.api?.onSessionUpdated?.(() => loadData())
   }, [])
 
   async function loadData() {
@@ -57,6 +60,7 @@ export default function App() {
           sessionData={sessionData}
           onOpenTimeline={() => setRoute('timeline')}
           onOpenSettings={() => setRoute('settings')}
+          onOpenHistory={() => setRoute('history')}
           onClose={() => window.api?.closeWindow?.()}
         />
       )}
@@ -68,6 +72,12 @@ export default function App() {
       )}
       {route === 'settings' && (
         <Settings onBack={() => setRoute('popup')} />
+      )}
+      {route === 'history' && (
+        <History
+          onBack={() => setRoute('popup')}
+          onSelectSession={(data) => { setSessionData(data); setRoute('timeline') }}
+        />
       )}
     </>
   )

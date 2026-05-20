@@ -92,6 +92,8 @@ export class IpcClient {
     }
   }
 
+  get isConnected() { return this.connected }
+
   private handleDisconnect() {
     this.connected = false
     this.pendingReject?.(new Error('pipe disconnected'))

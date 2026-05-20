@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import type { SessionWithEvents, ProgramEvent } from '../types'
 import styles from './TrayPopup.module.css'
 
@@ -6,12 +6,13 @@ interface Props {
   sessionData: SessionWithEvents | null
   onOpenTimeline: () => void
   onOpenSettings: () => void
+  onOpenHistory: () => void
   onClose: () => void
 }
 
 type Filter = 'all' | 'slow' | 'failed'
 
-export default function TrayPopup({ sessionData, onOpenTimeline, onOpenSettings, onClose }: Props) {
+export default function TrayPopup({ sessionData, onOpenTimeline, onOpenSettings, onOpenHistory, onClose }: Props) {
   const session = sessionData?.session
   const events = sessionData?.events ?? []
   const [filter, setFilter] = useState<Filter>('all')
@@ -176,6 +177,9 @@ export default function TrayPopup({ sessionData, onOpenTimeline, onOpenSettings,
       <div className={styles.footer}>
         <button className={styles.timelineBtn} onClick={onOpenTimeline} disabled={events.length === 0}>
           타임라인 보기
+        </button>
+        <button className={styles.historyBtn} onClick={onOpenHistory}>
+          기록
         </button>
       </div>
     </div>

@@ -34,19 +34,27 @@
     "wait-on": "^7.2.0"
   },
   "build": {
-    "appId": "com.bootready.ui",
+    "appId": "com.bootready.app",
     "productName": "BootReady",
     "win": {
       "target": "nsis",
       "icon": "assets/icon.ico"
     },
     "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "oneClick": true,
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "shortcutName": "BootReady"
     },
     "files": [
       "dist/**/*",
       "dist-electron/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../boot-core/target/release/boot-core.exe",
+        "to": "boot-core.exe"
+      }
     ],
     "directories": {
       "output": "release"

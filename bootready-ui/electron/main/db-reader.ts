@@ -70,6 +70,28 @@ export class DbReader {
     }
   }
 
+  getSessionById(id: number): SessionWithEvents | null {
+    if (!this.db) return null
+    try {
+      const sr = this.db.exec(
+        `SELECT id, started_at, completed_at, total_duration_ms, score FROM boot_session WHERE id = ?`,
+        [id]
+      )
+      if (!sr.length || !sr[0].values.length) return null
+      const session = toObject<BootSession>(sr[0])
+
+      const stmt = this.db.prepare(
+        `SELECT id, session_id, name, exe_path, start_ms, end_ms, status
+         FROM program_event WHERE session_id = ? ORDER BY start_ms ASC`
+      )
+      stmt.bind([id])
+      const events: ProgramEvent[] = []
+      while (stmt.step()) events.push(stmt.getAsObject() as unknown as ProgramEvent)
+      stmt.free()
+      return { session, events }
+    } catch { return null }
+  }
+
   getRecentSessions(limit = 10): BootSession[] {
     if (!this.db) return []
     try {

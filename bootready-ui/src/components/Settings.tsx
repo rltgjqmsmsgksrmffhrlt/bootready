@@ -22,16 +22,27 @@ export default function Settings({ onBack }: Props) {
   const [saved, setSaved] = useState(false)
 
   useEffect(() => {
-    // localStorage에서 설정 로드 (향후 Electron store로 교체)
-    try {
-      const stored = localStorage.getItem('bootready-settings')
-      if (stored) setSettings(JSON.parse(stored))
-    } catch {}
+    async function load() {
+      // 실제 autostart 상태 조회
+      const autostart = await window.api?.getAutostart?.() ?? true
+      // 나머지 설정은 config.json에서
+      const config = await window.api?.loadConfig?.() ?? {}
+      setSettings({
+        autostart,
+        idleSeconds: (config.idleSeconds as number) ?? DEFAULT_SETTINGS.idleSeconds,
+        slowThresholdMs: (config.slowThresholdMs as number) ?? DEFAULT_SETTINGS.slowThresholdMs,
+      })
+    }
+    load()
   }, [])
 
-  function save() {
+  async function save() {
     try {
-      localStorage.setItem('bootready-settings', JSON.stringify(settings))
+      await window.api?.setAutostart?.(settings.autostart)
+      await window.api?.saveConfig?.({
+        idleSeconds: settings.idleSeconds,
+        slowThresholdMs: settings.slowThresholdMs,
+      })
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch {}

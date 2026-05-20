@@ -39,6 +39,12 @@ declare global {
       closeWindow: () => void
       openTimeline: () => void
       onNavigate: (cb: (route: string) => void) => void
+      onSessionUpdated: (cb: () => void) => void
+      getSessionById: (id: number) => Promise<SessionWithEvents | null>
+      getAutostart: () => Promise<boolean>
+      setAutostart: (enable: boolean) => Promise<boolean>
+      saveConfig: (config: Record<string, unknown>) => Promise<boolean>
+      loadConfig: () => Promise<Record<string, unknown> | null>
       getFileIcon: (exePath: string) => Promise<string | null>
       setWindowHeight: (h: number) => Promise<void>
     }
