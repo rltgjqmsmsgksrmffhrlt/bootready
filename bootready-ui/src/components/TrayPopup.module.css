@@ -60,6 +60,11 @@
   color: var(--color-text-primary);
 }
 
+.iconBtnClose:hover {
+  background: rgba(224, 80, 80, 0.15);
+  color: var(--color-error);
+}
+
 /* 요약 */
 .summary {
   padding: 14px;

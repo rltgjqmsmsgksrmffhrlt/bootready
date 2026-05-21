@@ -62,7 +62,7 @@ export default function TrayPopup({ sessionData, onOpenTimeline, onOpenSettings,
         </div>
         <div className={styles.titleActions}>
           <button className={styles.iconBtn} onClick={onOpenSettings} title="설정">⚙</button>
-          <button className={styles.iconBtn} onClick={onClose} title="닫기">✕</button>
+          <button className={`${styles.iconBtn} ${styles.iconBtnClose}`} onClick={onClose} title="닫기">✕</button>
         </div>
       </div>
 
