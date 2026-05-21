@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, screen, Tray, nativeImage, Menu } from 'electron'
+import { app, BrowserWindow, ipcMain, screen } from 'electron'
 import { autoUpdater } from 'electron-updater'
 
 // V8 힙 상한 제한 — Chromium 기본값(256MB+)보다 훨씬 작게
@@ -15,7 +15,6 @@ const DIST = path.join(__dirname, '../../dist')
 const DIST_ELECTRON = path.join(__dirname, '../')
 
 let win: BrowserWindow | null = null
-let tray: Tray | null = null
 let ipcClient: IpcClient | null = null
 let dbReader: DbReader | null = null
 
@@ -186,6 +185,8 @@ function registerIpcHandlers() {
     } catch { return null }
   })
 
+  ipcMain.handle('quit-app', () => quitApp())
+
   ipcMain.handle('set-window-height', (_e, h: number) => {
     if (!win) return
     const clamped = Math.max(280, Math.min(480, h))
@@ -275,40 +276,6 @@ function watchShowSignal() {
   }
 }
 
-function buildTrayMenu(updateReady = false) {
-  const items: Electron.MenuItemConstructorOptions[] = [
-    { label: 'BootReady 열기', click: () => showWindow() },
-    { type: 'separator' },
-  ]
-  if (updateReady) {
-    items.push({
-      label: '업데이트 설치 후 재시작',
-      click: () => autoUpdater.quitAndInstall(),
-    })
-    items.push({ type: 'separator' })
-  }
-  items.push({ label: '종료', click: () => quitApp() })
-  return Menu.buildFromTemplate(items)
-}
-
-function getTrayIcon(): Electron.NativeImage {
-  const iconPath = path.join(app.getAppPath(), 'assets', 'icon-32.png')
-  try {
-    const img = nativeImage.createFromPath(iconPath)
-    if (!img.isEmpty()) return img
-  } catch {}
-  return nativeImage.createEmpty()
-}
-
-function createTray() {
-  tray = new Tray(getTrayIcon())
-  tray.setToolTip('BootReady')
-  tray.on('click', () => {
-    if (win?.isVisible()) { win.hide() } else { showWindow() }
-  })
-  tray.setContextMenu(buildTrayMenu())
-}
-
 function setupAutoUpdater() {
   if (!app.isPackaged) return
 
@@ -316,8 +283,7 @@ function setupAutoUpdater() {
   autoUpdater.autoInstallOnAppQuit = true
 
   autoUpdater.on('update-downloaded', () => {
-    tray?.setContextMenu(buildTrayMenu(true))
-    tray?.setToolTip('BootReady — 업데이트 준비됨')
+    win?.webContents.send('update-ready')
   })
 
   setTimeout(() => {
@@ -357,11 +323,6 @@ function startPipeWatcher() {
 
 function quitApp() {
   ipcClient?.disconnect()
-  tray?.destroy()
-  try {
-    const { execSync } = require('child_process')
-    execSync('taskkill /IM boot-core.exe /F', { stdio: 'ignore' })
-  } catch {}
   app.quit()
 }
 
@@ -428,19 +389,13 @@ app.whenReady().then(async () => {
 
   setupBootCore()
   registerIpcHandlers()
-  createTray()
   setupAutoUpdater()
   watchShowSignal()
   startPipeWatcher()
   await createWindow()
 })
 
-app.on('before-quit', () => {
-  tray?.destroy()
-  tray = null
-})
-
-// hide 방식이라 window-all-closed는 발생하지 않음 — tray 우클릭 메뉴로 종료
+// hide 방식이라 window-all-closed는 발생하지 않음 — Settings의 종료 버튼으로 종료
 app.on('window-all-closed', () => {
   // macOS 외엔 tray가 살아있으므로 quit 하지 않음
   if (process.platform !== 'darwin') return

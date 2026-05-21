@@ -36,6 +36,7 @@ if (!window.api) {
     loadConfig: () => Promise.resolve(null),
     getFileIcon: () => Promise.resolve(null),
     setWindowHeight: () => Promise.resolve(),
+    quitApp: () => Promise.resolve(),
   }
 }
 

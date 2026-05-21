@@ -18,4 +18,5 @@ contextBridge.exposeInMainWorld('api', {
   setAutostart: (enable: boolean) => ipcRenderer.invoke('set-autostart', enable),
   saveConfig: (config: Record<string, unknown>) => ipcRenderer.invoke('save-config', config),
   loadConfig: () => ipcRenderer.invoke('load-config'),
+  quitApp: () => ipcRenderer.invoke('quit-app'),
 })

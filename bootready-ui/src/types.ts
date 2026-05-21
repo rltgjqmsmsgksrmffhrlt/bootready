@@ -47,6 +47,7 @@ declare global {
       loadConfig: () => Promise<Record<string, unknown> | null>
       getFileIcon: (exePath: string) => Promise<string | null>
       setWindowHeight: (h: number) => Promise<void>
+      quitApp: () => Promise<void>
     }
   }
 }

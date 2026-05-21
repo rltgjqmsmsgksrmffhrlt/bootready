@@ -104,6 +104,12 @@ export default function Settings({ onBack }: Props) {
         <button className={styles.saveBtn} onClick={save}>
           {saved ? '✓ 저장됨' : '저장'}
         </button>
+        <button
+          className={styles.quitBtn}
+          onClick={() => window.api?.quitApp?.()}
+        >
+          앱 종료
+        </button>
       </div>
     </div>
   )
