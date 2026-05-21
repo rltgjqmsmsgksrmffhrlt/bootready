@@ -357,10 +357,58 @@ fn start_session_watcher(app: AppHandle) {
     });
 }
 
+// ── Tray ─────────────────────────────────────────────────────────────────────
+
+fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem};
+    use tauri::tray::{TrayIconBuilder, TrayIconEvent};
+
+    let show_i = MenuItem::with_id(app, "show", "BootReady 열기", true, None::<&str>)?;
+    let quit_i = MenuItem::with_id(app, "quit", "종료", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show_i, &quit_i])?;
+
+    TrayIconBuilder::new()
+        .menu(&menu)
+        .icon(app.default_window_icon().unwrap().clone())
+        .tooltip("BootReady")
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click { .. } = event {
+                let app = tray.app_handle();
+                if let Some(win) = app.get_webview_window("main") {
+                    position_bottom_right(&win);
+                    let _ = win.show();
+                    let _ = win.set_focus();
+                }
+            }
+        })
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => {
+                if let Some(win) = app.get_webview_window("main") {
+                    position_bottom_right(&win);
+                    let _ = win.show();
+                    let _ = win.set_focus();
+                }
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .build(app)?;
+
+    Ok(())
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            // 이미 실행 중이면 기존 창 포커스
+            if let Some(win) = app.get_webview_window("main") {
+                position_bottom_right(&win);
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
+        }))
         .invoke_handler(tauri::generate_handler![
             get_latest_session,
             get_boot_status,
@@ -386,6 +434,9 @@ fn main() {
                 }
             });
 
+            // Tray icon
+            setup_tray(app)?;
+
             // Background watchers
             start_signal_watcher(app.handle().clone());
             start_session_watcher(app.handle().clone());
@@ -395,7 +446,6 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error building tauri app")
         .run(|_app, event| {
-            // Keep alive in background — prevent exit when window closes
             if let tauri::RunEvent::ExitRequested { api, .. } = event {
                 api.prevent_exit();
             }

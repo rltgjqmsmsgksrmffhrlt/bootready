@@ -40,7 +40,7 @@
     ],
     "windows": {
       "nsis": {
-        "installMode": "perUser"
+        "installMode": "currentUser"
       }
     },
     "resources": ["../../boot-core/target/release/boot-core.exe"],
