@@ -94,8 +94,8 @@ export default function Settings({ onBack }: Props) {
 
         {/* 버전 정보 */}
         <Section title="정보">
-          <InfoRow label="버전" value="0.1.0" />
-          <InfoRow label="DB 위치" value="%APPDATA%\\BootReady\\data.db" mono />
+          <InfoRow label="버전" value="0.1.5" />
+          <InfoRow label="DB 위치" value="%APPDATA%\BootReady\data.db" mono />
           <InfoRow label="만든 사람" value="petit prin" />
         </Section>
       </div>

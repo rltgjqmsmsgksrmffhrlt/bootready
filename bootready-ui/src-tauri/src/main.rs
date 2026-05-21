@@ -3,8 +3,11 @@
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter, Manager};
 use winreg::{enums::HKEY_CURRENT_USER, RegKey};
+
+static FORCE_QUIT: AtomicBool = AtomicBool::new(false);
 
 // ── Data types ────────────────────────────────────────────────────────────────
 
@@ -235,7 +238,7 @@ fn close_window(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn set_window_height(app: AppHandle, h: u32) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("main") {
-        win.set_size(tauri::LogicalSize::new(360.0, h as f64))
+        win.set_size(tauri::LogicalSize::new(420.0, h as f64))
             .map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -294,27 +297,133 @@ fn load_config() -> Result<Option<serde_json::Value>, String> {
 }
 
 #[tauri::command]
-fn quit_app(app: AppHandle) {
-    app.exit(0);
+fn quit_app(_app: AppHandle) {
+    std::process::exit(0);
 }
 
 #[tauri::command]
-fn get_file_icon(_exe_path: String) -> Result<Option<String>, String> {
-    // TODO: implement Windows SHGetFileInfoW icon extraction
-    Ok(None)
+fn get_file_icon(exe_path: String) -> Result<Option<String>, String> {
+    use base64::Engine;
+
+    // Disk cache
+    let cache_key = {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut h = DefaultHasher::new();
+        exe_path.to_lowercase().hash(&mut h);
+        format!("{:016x}", h.finish())
+    };
+    let cache_path = appdata_dir().join("icons").join(format!("{}.png", cache_key));
+
+    if cache_path.exists() {
+        if let Ok(bytes) = std::fs::read(&cache_path) {
+            return Ok(Some(format!(
+                "data:image/png;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(&bytes)
+            )));
+        }
+    }
+
+    // Extract via PowerShell (System.Drawing)
+    let ps = format!(
+        r#"Add-Type -AssemblyName System.Drawing
+try {{
+  $icon = [System.Drawing.Icon]::ExtractAssociatedIcon('{path}')
+  $bmp = $icon.ToBitmap()
+  $ms = New-Object System.IO.MemoryStream
+  $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+  [Convert]::ToBase64String($ms.ToArray())
+}} catch {{ '' }}"#,
+        path = exe_path.replace('\'', "''")
+    );
+
+    let out = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    let b64 = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if b64.is_empty() {
+        return Ok(None);
+    }
+
+    let png = base64::engine::general_purpose::STANDARD
+        .decode(&b64)
+        .map_err(|e| e.to_string())?;
+
+    std::fs::create_dir_all(cache_path.parent().unwrap()).ok();
+    std::fs::write(&cache_path, &png).ok();
+
+    Ok(Some(format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(&png)
+    )))
 }
 
 // ── Background tasks ──────────────────────────────────────────────────────────
 
 fn position_bottom_right(win: &tauri::WebviewWindow) {
-    if let Ok(Some(monitor)) = win.primary_monitor() {
+    // Try primary monitor first, fall back to current monitor
+    let monitor = win.primary_monitor().ok().flatten()
+        .or_else(|| win.current_monitor().ok().flatten());
+
+    if let Some(monitor) = monitor {
         let screen = monitor.size();
+        let pos = monitor.position(); // monitor origin (multi-monitor support)
         let scale = monitor.scale_factor();
-        let win_w = (360.0 * scale) as i32;
-        let win_h = (480.0 * scale) as i32;
-        let x = screen.width as i32 - win_w - 20;
-        let y = screen.height as i32 - win_h - 60;
+
+        // Window size in physical pixels
+        let win_size = win.outer_size().unwrap_or(tauri::PhysicalSize::new(
+            (420.0 * scale) as u32,
+            (560.0 * scale) as u32,
+        ));
+
+        // Taskbar height: scale 48px logical with DPI
+        let taskbar_h = (48.0 * scale) as i32 + 8;
+
+        let x = pos.x + screen.width as i32 - win_size.width as i32 - 20;
+        let y = pos.y + screen.height as i32 - win_size.height as i32 - taskbar_h;
         let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
+    }
+}
+
+fn ensure_boot_core(app: &tauri::App) {
+    let dest = appdata_dir().join("boot-core.exe");
+
+    // Copy boot-core.exe from bundle resources if not present
+    if !dest.exists() {
+        if let Ok(src) = app.path().resource_dir() {
+            let src = src.join("boot-core.exe");
+            if src.exists() {
+                std::fs::create_dir_all(&appdata_dir()).ok();
+                std::fs::copy(&src, &dest).ok();
+            }
+        }
+    }
+
+    // Register in Run key if not already registered
+    if dest.exists() {
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        if let Ok(run) = hkcu.open_subkey_with_flags(
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            winreg::enums::KEY_SET_VALUE | winreg::enums::KEY_QUERY_VALUE,
+        ) {
+            let already: bool = run.get_value::<String, _>("BootReadyCore").is_ok();
+            if !already {
+                run.set_value("BootReadyCore", &dest.to_string_lossy().as_ref()).ok();
+            }
+        }
+
+        // Launch boot-core if not running
+        let running = std::process::Command::new("tasklist")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).contains("boot-core.exe"))
+            .unwrap_or(false);
+        if !running {
+            std::process::Command::new(&dest)
+                .spawn()
+                .ok();
+        }
     }
 }
 
@@ -369,10 +478,12 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
 
     TrayIconBuilder::new()
         .menu(&menu)
+        .show_menu_on_left_click(false)
         .icon(app.default_window_icon().unwrap().clone())
         .tooltip("BootReady")
         .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click { .. } = event {
+            use tauri::tray::{MouseButton, MouseButtonState};
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
                 let app = tray.app_handle();
                 if let Some(win) = app.get_webview_window("main") {
                     position_bottom_right(&win);
@@ -434,6 +545,12 @@ fn main() {
                 }
             });
 
+            // Pre-position window before first show
+            position_bottom_right(&win);
+
+            // Ensure boot-core is present and running
+            ensure_boot_core(app);
+
             // Tray icon
             setup_tray(app)?;
 
@@ -447,7 +564,9 @@ fn main() {
         .expect("error building tauri app")
         .run(|_app, event| {
             if let tauri::RunEvent::ExitRequested { api, .. } = event {
-                api.prevent_exit();
+                if !FORCE_QUIT.load(Ordering::SeqCst) {
+                    api.prevent_exit();
+                }
             }
         });
 }
