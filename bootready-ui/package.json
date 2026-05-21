@@ -52,11 +52,13 @@
       "installerIcon": "assets/icon.ico",
       "uninstallerIcon": "assets/icon.ico",
       "shortcutName": "BootReady",
-      "license": "assets/welcome.html"
+      "license": "assets/welcome.html",
+      "include": "assets/installer.nsh"
     },
 "files": [
       "dist/**/*",
-      "dist-electron/**/*"
+      "dist-electron/**/*",
+      "assets/**/*"
     ],
     "directories": {
       "output": "release"

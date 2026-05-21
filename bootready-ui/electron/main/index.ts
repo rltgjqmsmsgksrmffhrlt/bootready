@@ -71,10 +71,8 @@ async function createWindow() {
     win.loadFile(path.join(DIST, 'index.html'))
   }
 
-  win.once('ready-to-show', () => {
-    win?.show()
-    win?.focus()
-  })
+  // 시작 시 창 숨김 — 트레이 클릭으로만 표시
+  win.once('ready-to-show', () => {})
 
   // 포커스 잃으면 숨기고 메모리 해제
   win.on('blur', () => {
@@ -293,9 +291,17 @@ function buildTrayMenu(updateReady = false) {
   return Menu.buildFromTemplate(items)
 }
 
+function getTrayIcon(): Electron.NativeImage {
+  const iconPath = path.join(app.getAppPath(), 'assets', 'icon-32.png')
+  try {
+    const img = nativeImage.createFromPath(iconPath)
+    if (!img.isEmpty()) return img
+  } catch {}
+  return nativeImage.createEmpty()
+}
+
 function createTray() {
-  const icon = nativeImage.createEmpty()
-  tray = new Tray(icon)
+  tray = new Tray(getTrayIcon())
   tray.setToolTip('BootReady')
   tray.on('click', () => {
     if (win?.isVisible()) { win.hide() } else { showWindow() }
@@ -352,6 +358,10 @@ function startPipeWatcher() {
 function quitApp() {
   ipcClient?.disconnect()
   tray?.destroy()
+  try {
+    const { execSync } = require('child_process')
+    execSync('taskkill /IM boot-core.exe /F', { stdio: 'ignore' })
+  } catch {}
   app.quit()
 }
 
@@ -423,6 +433,11 @@ app.whenReady().then(async () => {
   watchShowSignal()
   startPipeWatcher()
   await createWindow()
+})
+
+app.on('before-quit', () => {
+  tray?.destroy()
+  tray = null
 })
 
 // hide 방식이라 window-all-closed는 발생하지 않음 — tray 우클릭 메뉴로 종료
