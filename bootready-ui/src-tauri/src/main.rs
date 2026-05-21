@@ -486,9 +486,13 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
             if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
                 let app = tray.app_handle();
                 if let Some(win) = app.get_webview_window("main") {
-                    position_bottom_right(&win);
-                    let _ = win.show();
-                    let _ = win.set_focus();
+                    if win.is_visible().unwrap_or(false) {
+                        let _ = win.hide();
+                    } else {
+                        position_bottom_right(&win);
+                        let _ = win.show();
+                        let _ = win.set_focus();
+                    }
                 }
             }
         })
