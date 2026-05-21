@@ -54,21 +54,7 @@
       "shortcutName": "BootReady",
       "license": "assets/welcome.html"
     },
-    "mac": {
-      "target": "dmg",
-      "icon": "assets/icon.icns",
-      "extraResources": [
-        { "from": "../boot-core/target/release/boot-core", "to": "boot-core" }
-      ]
-    },
-    "linux": {
-      "target": "AppImage",
-      "icon": "../icon-256.png",
-      "extraResources": [
-        { "from": "../boot-core/target/release/boot-core", "to": "boot-core" }
-      ]
-    },
-    "files": [
+"files": [
       "dist/**/*",
       "dist-electron/**/*"
     ],
