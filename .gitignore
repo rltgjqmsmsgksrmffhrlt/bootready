@@ -1,12 +1,14 @@
 # Rust
 /boot-core/target/
 boot-core/**/*.pdb
+bootready-ui/src-tauri/target/
 
-# Node / Electron
+# Node / Tauri
 bootready-ui/node_modules/
 bootready-ui/dist/
 bootready-ui/dist-electron/
 bootready-ui/release/
+bootready-ui/src-tauri/gen/
 
 # SQLite
 *.db
