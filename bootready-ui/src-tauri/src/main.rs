@@ -3,11 +3,14 @@
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 
 static FORCE_QUIT: AtomicBool = AtomicBool::new(false);
+// 포커스 잃어서 숨긴 시각 (ms). 트레이 클릭이 이 직후면 토글 닫힘으로 처리.
+static HIDE_TIME_MS: AtomicU64 = AtomicU64::new(0);
 
 // ── Data types ────────────────────────────────────────────────────────────────
 
@@ -486,13 +489,18 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
             if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
                 let app = tray.app_handle();
                 if let Some(win) = app.get_webview_window("main") {
-                    if win.is_visible().unwrap_or(false) {
-                        let _ = win.hide();
-                    } else {
-                        position_bottom_right(&win);
-                        let _ = win.show();
-                        let _ = win.set_focus();
+                    let now_ms = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    let hide_ms = HIDE_TIME_MS.load(Ordering::SeqCst);
+                    // 300ms 이내 = 이 클릭으로 포커스 잃어서 숨긴 것 → 닫힘 유지
+                    if now_ms.saturating_sub(hide_ms) < 300 {
+                        return;
                     }
+                    position_bottom_right(&win);
+                    let _ = win.show();
+                    let _ = win.set_focus();
                 }
             }
         })
@@ -545,6 +553,11 @@ fn main() {
             let win_clone = win.clone();
             win.on_window_event(move |event| {
                 if let tauri::WindowEvent::Focused(false) = event {
+                    let ms = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    HIDE_TIME_MS.store(ms, Ordering::SeqCst);
                     let _ = win_clone.hide();
                 }
             });
