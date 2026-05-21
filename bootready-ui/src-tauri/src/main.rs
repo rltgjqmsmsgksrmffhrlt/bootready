@@ -238,7 +238,7 @@ fn close_window(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn set_window_height(app: AppHandle, h: u32) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("main") {
-        win.set_size(tauri::LogicalSize::new(360.0, h as f64))
+        win.set_size(tauri::LogicalSize::new(420.0, h as f64))
             .map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -297,9 +297,8 @@ fn load_config() -> Result<Option<serde_json::Value>, String> {
 }
 
 #[tauri::command]
-fn quit_app(app: AppHandle) {
-    FORCE_QUIT.store(true, Ordering::SeqCst);
-    app.exit(0);
+fn quit_app(_app: AppHandle) {
+    std::process::exit(0);
 }
 
 #[tauri::command]
@@ -375,8 +374,8 @@ fn position_bottom_right(win: &tauri::WebviewWindow) {
 
         // Window size in physical pixels
         let win_size = win.outer_size().unwrap_or(tauri::PhysicalSize::new(
-            (360.0 * scale) as u32,
-            (480.0 * scale) as u32,
+            (420.0 * scale) as u32,
+            (560.0 * scale) as u32,
         ));
 
         // Taskbar height: scale 48px logical with DPI
