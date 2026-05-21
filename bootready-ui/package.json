@@ -13,14 +13,15 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "sql.js": "^1.12.0",
-    "recharts": "^2.12.2"
+    "electron-updater": "^6.8.3",
+    "recharts": "^2.12.2",
+    "sql.js": "^1.12.0"
   },
   "devDependencies": {
-    "@types/sql.js": "^1.4.9",
     "@types/node": "^20.11.5",
     "@types/react": "^18.2.48",
     "@types/react-dom": "^18.2.18",
+    "@types/sql.js": "^1.4.9",
     "@vitejs/plugin-react": "^4.2.1",
     "concurrently": "^8.2.2",
     "electron": "^29.1.0",
@@ -38,26 +39,46 @@
     "productName": "BootReady",
     "win": {
       "target": "nsis",
-      "icon": "assets/icon.ico"
+      "icon": "assets/icon.ico",
+      "extraResources": [
+        { "from": "../boot-core/target/release/boot-core.exe", "to": "boot-core.exe" }
+      ]
     },
     "nsis": {
-      "oneClick": true,
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": false,
+      "allowToChangeInstallationDirectory": false,
       "installerIcon": "assets/icon.ico",
       "uninstallerIcon": "assets/icon.ico",
-      "shortcutName": "BootReady"
+      "shortcutName": "BootReady",
+      "license": "assets/welcome.html"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "assets/icon.icns",
+      "extraResources": [
+        { "from": "../boot-core/target/release/boot-core", "to": "boot-core" }
+      ]
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "../icon-256.png",
+      "extraResources": [
+        { "from": "../boot-core/target/release/boot-core", "to": "boot-core" }
+      ]
     },
     "files": [
       "dist/**/*",
       "dist-electron/**/*"
     ],
-    "extraResources": [
-      {
-        "from": "../boot-core/target/release/boot-core.exe",
-        "to": "boot-core.exe"
-      }
-    ],
     "directories": {
       "output": "release"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "rltgjqmsmsgksrmffhrlt",
+      "repo": "bootready"
     }
   }
 }

@@ -1,4 +1,8 @@
 import { app, BrowserWindow, ipcMain, screen, Tray, nativeImage, Menu } from 'electron'
+import { autoUpdater } from 'electron-updater'
+
+// V8 힙 상한 제한 — Chromium 기본값(256MB+)보다 훨씬 작게
+app.commandLine.appendSwitch('js-flags', '--max-old-space-size=64')
 import path from 'path'
 import fs from 'fs'
 import os from 'os'
@@ -55,6 +59,8 @@ async function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
+      spellcheck: false,
+      backgroundThrottling: true,
     },
   })
 
@@ -70,9 +76,11 @@ async function createWindow() {
     win?.focus()
   })
 
-  // 포커스 잃으면 숨기기 (close 아님 — tray 클릭으로 다시 표시 가능)
+  // 포커스 잃으면 숨기고 메모리 해제
   win.on('blur', () => {
     win?.hide()
+    iconMemCache.clear()
+    win?.webContents.session.clearCache().catch(() => {})
   })
 
   win.on('closed', () => {
@@ -239,6 +247,7 @@ function showWindow() {
   const pos = getWindowPos()
   win.setPosition(pos.x, pos.y)
   win.show()
+  app.focus({ steal: true })
   win.focus()
 }
 
@@ -268,27 +277,46 @@ function watchShowSignal() {
   }
 }
 
+function buildTrayMenu(updateReady = false) {
+  const items: Electron.MenuItemConstructorOptions[] = [
+    { label: 'BootReady 열기', click: () => showWindow() },
+    { type: 'separator' },
+  ]
+  if (updateReady) {
+    items.push({
+      label: '업데이트 설치 후 재시작',
+      click: () => autoUpdater.quitAndInstall(),
+    })
+    items.push({ type: 'separator' })
+  }
+  items.push({ label: '종료', click: () => quitApp() })
+  return Menu.buildFromTemplate(items)
+}
+
 function createTray() {
   const icon = nativeImage.createEmpty()
   tray = new Tray(icon)
   tray.setToolTip('BootReady')
-
   tray.on('click', () => {
     if (win?.isVisible()) { win.hide() } else { showWindow() }
   })
+  tray.setContextMenu(buildTrayMenu())
+}
 
-  const menu = Menu.buildFromTemplate([
-    {
-      label: 'BootReady 열기',
-      click: () => showWindow(),
-    },
-    { type: 'separator' },
-    {
-      label: '종료',
-      click: () => quitApp(),
-    },
-  ])
-  tray.setContextMenu(menu)
+function setupAutoUpdater() {
+  if (!app.isPackaged) return
+
+  autoUpdater.autoDownload = true
+  autoUpdater.autoInstallOnAppQuit = true
+
+  autoUpdater.on('update-downloaded', () => {
+    tray?.setContextMenu(buildTrayMenu(true))
+    tray?.setToolTip('BootReady — 업데이트 준비됨')
+  })
+
+  setTimeout(() => {
+    autoUpdater.checkForUpdates().catch(() => {})
+  }, 5000)
 }
 
 // boot-core 파이프 재연결 + 세션 완료 감지 → 창 자동 갱신
@@ -391,6 +419,7 @@ app.whenReady().then(async () => {
   setupBootCore()
   registerIpcHandlers()
   createTray()
+  setupAutoUpdater()
   watchShowSignal()
   startPipeWatcher()
   await createWindow()
