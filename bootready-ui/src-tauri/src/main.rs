@@ -351,29 +351,20 @@ fn extract_icon_native(exe_path: &str) -> Option<Vec<u8>> {
         CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, GetObjectW, SelectObject,
         BITMAP, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
     };
-    use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
-    use windows::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON};
+    use windows::Win32::UI::Shell::ExtractIconExW;
     use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, ICONINFO};
     use windows::core::PCWSTR;
 
     let resolved = expand_env_vars(exe_path);
 
     unsafe {
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-
         let wide: Vec<u16> = resolved.encode_utf16().chain(std::iter::once(0)).collect();
-        let mut shinfo = SHFILEINFOW::default();
-        let ret = SHGetFileInfoW(
-            PCWSTR(wide.as_ptr()),
-            Default::default(),
-            Some(&mut shinfo),
-            std::mem::size_of::<SHFILEINFOW>() as u32,
-            SHGFI_ICON | SHGFI_LARGEICON,
-        );
-        if ret == 0 {
+        let mut hicon_large = windows::Win32::UI::WindowsAndMessaging::HICON::default();
+        let count = ExtractIconExW(PCWSTR(wide.as_ptr()), 0, Some(&mut hicon_large), None, 1);
+        if count == 0 {
             return None;
         }
-        let hicon = shinfo.hIcon;
+        let hicon = hicon_large;
         if hicon.is_invalid() {
             return None;
         }
@@ -454,7 +445,6 @@ fn extract_icon_native(exe_path: &str) -> Option<Vec<u8>> {
             buf
         };
 
-        CoUninitialize();
         Some(png_bytes)
     }
 }
