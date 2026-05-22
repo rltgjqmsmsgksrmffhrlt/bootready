@@ -17,19 +17,8 @@ export default function TrayPopup({ sessionData, onOpenTimeline, onOpenSettings,
   const events = sessionData?.events ?? []
   const [filter, setFilter] = useState<Filter>('all')
   const [hideMicrosoft, setHideMicrosoft] = useState(false)
-  const [icons, setIcons] = useState<Record<string, string>>({})
   const [scoreExpanded, setScoreExpanded] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
-
-  // 앱 아이콘 로드
-  useEffect(() => {
-    for (const ev of events) {
-      if (!ev.exe_path || icons[ev.exe_path]) continue
-      window.api.getFileIcon(ev.exe_path).then(b64 => {
-        if (b64) setIcons(prev => ({ ...prev, [ev.exe_path!]: b64 }))
-      })
-    }
-  }, [events])
 
   // 창 높이 자동 조절
   useEffect(() => {
@@ -166,7 +155,7 @@ export default function TrayPopup({ sessionData, onOpenTimeline, onOpenSettings,
               <div className={styles.emptyFilter}>해당 항목 없음</div>
             ) : (
               displayed.map(ev => (
-                <ProgramRow key={ev.id} event={ev} icon={icons[ev.exe_path ?? ''] ?? null} />
+                <ProgramRow key={ev.id} event={ev} />
               ))
             )}
           </div>
@@ -186,19 +175,12 @@ export default function TrayPopup({ sessionData, onOpenTimeline, onOpenSettings,
   )
 }
 
-function ProgramRow({ event, icon }: { event: ProgramEvent; icon: string | null }) {
+function ProgramRow({ event }: { event: ProgramEvent }) {
   const duration =
     event.start_ms != null && event.end_ms != null ? event.end_ms - event.start_ms : null
 
   return (
     <div className={styles.programRow} title={event.exe_path ?? ''}>
-      <div className={styles.appIcon}>
-        {icon ? (
-          <img src={icon} width={24} height={24} alt="" />
-        ) : (
-          <div className={styles.appIconFallback} />
-        )}
-      </div>
       <span className={styles.programName}>{event.name}</span>
       <div className={styles.programMeta}>
         {event.status === 'slow' && (

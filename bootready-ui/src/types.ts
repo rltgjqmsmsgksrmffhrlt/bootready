@@ -29,7 +29,7 @@ export interface BootStatus {
   score: number | null
 }
 
-// Electron preload API 타입
+// Tauri API 타입
 declare global {
   interface Window {
     api: {
@@ -45,7 +45,6 @@ declare global {
       setAutostart: (enable: boolean) => Promise<boolean>
       saveConfig: (config: Record<string, unknown>) => Promise<boolean>
       loadConfig: () => Promise<Record<string, unknown> | null>
-      getFileIcon: (exePath: string) => Promise<string | null>
       setWindowHeight: (h: number) => Promise<void>
       quitApp: () => Promise<void>
     }

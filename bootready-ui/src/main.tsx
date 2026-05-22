@@ -23,7 +23,6 @@ async function setup() {
       setAutostart: (enable) => invoke('set_autostart', { enable }),
       saveConfig: (config) => invoke('save_config', { config }),
       loadConfig: () => invoke('load_config'),
-      getFileIcon: (exePath) => invoke('get_file_icon', { exe_path: exePath }),
       setWindowHeight: (h) => invoke('set_window_height', { h }),
       quitApp: () => invoke('quit_app'),
     }
@@ -59,7 +58,6 @@ async function setup() {
       setAutostart: () => Promise.resolve(true),
       saveConfig: () => Promise.resolve(true),
       loadConfig: () => Promise.resolve(null),
-      getFileIcon: () => Promise.resolve(null),
       setWindowHeight: () => Promise.resolve(),
       quitApp: () => Promise.resolve(),
     }
