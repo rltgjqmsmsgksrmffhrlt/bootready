@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use windows::core::PCWSTR;
-use windows::Win32::Foundation::{CloseHandle, ERROR_NO_MORE_ITEMS};
+use windows::core::{PCWSTR, HSTRING};
+use windows::Win32::Foundation::{CloseHandle, ERROR_NO_MORE_ITEMS, HWND};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
@@ -16,6 +16,8 @@ use windows::Win32::System::Registry::{
     RegCloseKey, RegEnumValueW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE,
     KEY_READ, REG_SZ,
 };
+use windows::Win32::UI::Shell::ShellExecuteW;
+use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use crate::db::Database;
 
 /// 시작프로그램 하나를 나타내는 구조체
@@ -209,6 +211,9 @@ impl StartupWatcher {
         }
 
         info!("session finalized: total={}ms score={}", total_ms, score);
+
+        open_startup_urls();
+
         Ok(())
     }
 }
@@ -493,6 +498,47 @@ pub fn calculate_score(total_ms: i64, program_count: usize) -> i64 {
     };
 
     (time_score - count_penalty).max(10)
+}
+
+fn open_startup_urls() {
+    let appdata = match std::env::var("APPDATA") {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let config_path = std::path::PathBuf::from(appdata).join("BootReady").join("config.json");
+
+    let content = match std::fs::read_to_string(&config_path) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    let json: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    let urls = match json.get("startup_urls").and_then(|v| v.as_array()) {
+        Some(arr) => arr.clone(),
+        None => return,
+    };
+
+    for url_val in urls {
+        if let Some(url) = url_val.as_str() {
+            let operation = HSTRING::from("open");
+            let file = HSTRING::from(url);
+            unsafe {
+                ShellExecuteW(
+                    HWND(std::ptr::null_mut()),
+                    PCWSTR(operation.as_ptr()),
+                    PCWSTR(file.as_ptr()),
+                    PCWSTR::null(),
+                    PCWSTR::null(),
+                    SW_SHOWNORMAL,
+                );
+            }
+            info!("opened startup url: {}", url);
+        }
+    }
 }
 
 fn epoch_ms() -> u64 {

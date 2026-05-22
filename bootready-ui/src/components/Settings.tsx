@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import styles from './Settings.module.css'
 
 interface Props {
@@ -9,28 +9,31 @@ interface SettingsState {
   autostart: boolean
   idleSeconds: number
   slowThresholdMs: number
+  startupUrls: string[]
 }
 
 const DEFAULT_SETTINGS: SettingsState = {
   autostart: true,
   idleSeconds: 5,
   slowThresholdMs: 30000,
+  startupUrls: [],
 }
 
 export default function Settings({ onBack }: Props) {
   const [settings, setSettings] = useState<SettingsState>(DEFAULT_SETTINGS)
   const [saved, setSaved] = useState(false)
+  const [urlInput, setUrlInput] = useState('')
+  const urlInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     async function load() {
-      // 실제 autostart 상태 조회
       const autostart = await window.api?.getAutostart?.() ?? true
-      // 나머지 설정은 config.json에서
       const config = await window.api?.loadConfig?.() ?? {}
       setSettings({
         autostart,
         idleSeconds: (config.idleSeconds as number) ?? DEFAULT_SETTINGS.idleSeconds,
         slowThresholdMs: (config.slowThresholdMs as number) ?? DEFAULT_SETTINGS.slowThresholdMs,
+        startupUrls: (config.startup_urls as string[]) ?? [],
       })
     }
     load()
@@ -42,10 +45,25 @@ export default function Settings({ onBack }: Props) {
       await window.api?.saveConfig?.({
         idleSeconds: settings.idleSeconds,
         slowThresholdMs: settings.slowThresholdMs,
+        startup_urls: settings.startupUrls,
       })
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch {}
+  }
+
+  function addUrl() {
+    const url = urlInput.trim()
+    if (!url) return
+    const normalized = url.startsWith('http') ? url : `https://${url}`
+    if (settings.startupUrls.includes(normalized)) return
+    setSettings(s => ({ ...s, startupUrls: [...s.startupUrls, normalized] }))
+    setUrlInput('')
+    urlInputRef.current?.focus()
+  }
+
+  function removeUrl(i: number) {
+    setSettings(s => ({ ...s, startupUrls: s.startupUrls.filter((_, idx) => idx !== i) }))
   }
 
   return (
@@ -66,6 +84,35 @@ export default function Settings({ onBack }: Props) {
             value={settings.autostart}
             onChange={(v) => setSettings((s) => ({ ...s, autostart: v }))}
           />
+        </Section>
+
+        {/* 부팅 완료 시 열 URL */}
+        <Section title="부팅 완료 시 열 URL">
+          <div className={styles.urlSection}>
+            <div className={styles.urlHint}>부팅이 완료되면 아래 URL을 브라우저로 자동으로 엽니다.</div>
+            {settings.startupUrls.length > 0 && (
+              <ul className={styles.urlList}>
+                {settings.startupUrls.map((url, i) => (
+                  <li key={i} className={styles.urlItem}>
+                    <span className={styles.urlText} title={url}>{url}</span>
+                    <button className={styles.urlRemoveBtn} onClick={() => removeUrl(i)}>✕</button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className={styles.urlInputRow}>
+              <input
+                ref={urlInputRef}
+                className={styles.urlInput}
+                type="text"
+                placeholder="https://example.com"
+                value={urlInput}
+                onChange={e => setUrlInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && addUrl()}
+              />
+              <button className={styles.urlAddBtn} onClick={addUrl}>추가</button>
+            </div>
+          </div>
         </Section>
 
         {/* 감지 설정 */}
@@ -94,7 +141,7 @@ export default function Settings({ onBack }: Props) {
 
         {/* 버전 정보 */}
         <Section title="정보">
-          <InfoRow label="버전" value="0.1.7" />
+          <InfoRow label="버전" value="0.1.8" />
           <InfoRow label="DB 위치" value="%APPDATA%\BootReady\data.db" mono />
           <InfoRow label="만든 사람" value="petit prin" />
         </Section>
