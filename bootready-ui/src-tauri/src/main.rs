@@ -4,6 +4,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::os::windows::process::CommandExt;
 use tauri::{AppHandle, Emitter, Manager};
 use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 
@@ -305,7 +306,6 @@ fn quit_app(_app: AppHandle) {
 fn get_file_icon(exe_path: String) -> Result<Option<String>, String> {
     use base64::Engine;
 
-    // Disk cache
     let cache_key = {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
@@ -324,32 +324,7 @@ fn get_file_icon(exe_path: String) -> Result<Option<String>, String> {
         }
     }
 
-    // Extract via PowerShell (System.Drawing)
-    let ps = format!(
-        r#"Add-Type -AssemblyName System.Drawing
-try {{
-  $icon = [System.Drawing.Icon]::ExtractAssociatedIcon('{path}')
-  $bmp = $icon.ToBitmap()
-  $ms = New-Object System.IO.MemoryStream
-  $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
-  [Convert]::ToBase64String($ms.ToArray())
-}} catch {{ '' }}"#,
-        path = exe_path.replace('\'', "''")
-    );
-
-    let out = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
-        .output()
-        .map_err(|e| e.to_string())?;
-
-    let b64 = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if b64.is_empty() {
-        return Ok(None);
-    }
-
-    let png = base64::engine::general_purpose::STANDARD
-        .decode(&b64)
-        .map_err(|e| e.to_string())?;
+    let png = extract_icon_native(&exe_path).ok_or_else(|| "icon not found".to_string())?;
 
     std::fs::create_dir_all(cache_path.parent().unwrap()).ok();
     std::fs::write(&cache_path, &png).ok();
@@ -358,6 +333,130 @@ try {{
         "data:image/png;base64,{}",
         base64::engine::general_purpose::STANDARD.encode(&png)
     )))
+}
+
+fn expand_env_vars(path: &str) -> String {
+    use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
+    use windows::core::PCWSTR;
+    let wide: Vec<u16> = path.encode_utf16().chain(std::iter::once(0)).collect();
+    let needed = unsafe { ExpandEnvironmentStringsW(PCWSTR(wide.as_ptr()), None) } as usize;
+    if needed == 0 { return path.to_string(); }
+    let mut buf = vec![0u16; needed];
+    unsafe { ExpandEnvironmentStringsW(PCWSTR(wide.as_ptr()), Some(&mut buf)) };
+    String::from_utf16_lossy(&buf).trim_end_matches('\0').to_string()
+}
+
+fn extract_icon_native(exe_path: &str) -> Option<Vec<u8>> {
+    use windows::Win32::Graphics::Gdi::{
+        CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, GetObjectW, SelectObject,
+        BITMAP, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+    };
+    use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
+    use windows::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON};
+    use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, ICONINFO};
+    use windows::core::PCWSTR;
+
+    let resolved = expand_env_vars(exe_path);
+
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+
+        let wide: Vec<u16> = resolved.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut shinfo = SHFILEINFOW::default();
+        let ret = SHGetFileInfoW(
+            PCWSTR(wide.as_ptr()),
+            Default::default(),
+            Some(&mut shinfo),
+            std::mem::size_of::<SHFILEINFOW>() as u32,
+            SHGFI_ICON | SHGFI_LARGEICON,
+        );
+        if ret == 0 {
+            return None;
+        }
+        let hicon = shinfo.hIcon;
+        if hicon.is_invalid() {
+            return None;
+        }
+
+        let mut icon_info = ICONINFO::default();
+        if GetIconInfo(hicon, &mut icon_info).is_err() {
+            let _ = DestroyIcon(hicon);
+            return None;
+        }
+
+        let mut bm = BITMAP::default();
+        GetObjectW(
+            icon_info.hbmColor,
+            std::mem::size_of::<BITMAP>() as i32,
+            Some(&mut bm as *mut _ as *mut _),
+        );
+
+        let w = bm.bmWidth as u32;
+        let h = bm.bmHeight.unsigned_abs();
+        if w == 0 || h == 0 {
+            let _ = DestroyIcon(hicon);
+            let _ = DeleteObject(icon_info.hbmColor);
+            let _ = DeleteObject(icon_info.hbmMask);
+            return None;
+        }
+
+        let dc = CreateCompatibleDC(None);
+        let old_obj = SelectObject(dc, icon_info.hbmColor);
+
+        let mut bmi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: w as i32,
+                biHeight: -(h as i32),
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                biSizeImage: w * h * 4,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let mut pixels = vec![0u8; (w * h * 4) as usize];
+        let lines = GetDIBits(
+            dc,
+            icon_info.hbmColor,
+            0,
+            h,
+            Some(pixels.as_mut_ptr() as *mut _),
+            &mut bmi,
+            DIB_RGB_COLORS,
+        );
+
+        SelectObject(dc, old_obj);
+        DeleteDC(dc);
+        DeleteObject(icon_info.hbmColor);
+        DeleteObject(icon_info.hbmMask);
+        let _ = DestroyIcon(hicon);
+
+        if lines == 0 {
+            return None;
+        }
+
+        // BGRA → RGBA
+        for chunk in pixels.chunks_mut(4) {
+            chunk.swap(0, 2);
+        }
+
+        let png_bytes = {
+            let mut buf = Vec::new();
+            let mut encoder = png::Encoder::new(&mut buf, w, h);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().ok()?;
+            writer.write_image_data(&pixels).ok()?;
+            drop(writer);
+            buf
+        };
+
+        CoUninitialize();
+        Some(png_bytes)
+    }
 }
 
 // ── Background tasks ──────────────────────────────────────────────────────────
@@ -401,17 +500,27 @@ fn ensure_boot_core(app: &tauri::App) {
         }
     }
 
-    // Register in Run key if not already registered
+    // Register via Task Scheduler (starts earlier at logon than HKCU Run)
     if dest.exists() {
-        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        if let Ok(run) = hkcu.open_subkey_with_flags(
-            r"Software\Microsoft\Windows\CurrentVersion\Run",
-            winreg::enums::KEY_SET_VALUE | winreg::enums::KEY_QUERY_VALUE,
-        ) {
-            let already: bool = run.get_value::<String, _>("BootReadyCore").is_ok();
-            if !already {
-                run.set_value("BootReadyCore", &dest.to_string_lossy().as_ref()).ok();
-            }
+        let dest_str = dest.to_string_lossy();
+        let task_exists = std::process::Command::new("schtasks")
+            .args(["/query", "/tn", "BootReadyCore"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !task_exists {
+            std::process::Command::new("schtasks")
+                .args([
+                    "/create",
+                    "/tn", "BootReadyCore",
+                    "/tr", dest_str.as_ref(),
+                    "/sc", "ONLOGON",
+                    "/delay", "0000:00",
+                    "/f",
+                ])
+                .creation_flags(0x08000000) // CREATE_NO_WINDOW
+                .spawn()
+                .ok();
         }
 
         // Launch boot-core if not running
