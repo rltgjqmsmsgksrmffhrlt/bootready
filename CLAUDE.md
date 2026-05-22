@@ -1,7 +1,7 @@
 # BootReady — 프로젝트 가이드
 
 ## 버전 관리
-**현재 버전: 0.1.8**
+**현재 버전: 1.0.0**
 
 버전 변경 시 반드시 아래 4곳을 함께 수정:
 1. `bootready-ui/package.json` → `"version"`
