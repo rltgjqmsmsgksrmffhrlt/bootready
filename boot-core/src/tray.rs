@@ -26,7 +26,7 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateIconIndirect, CreateWindowExW, DefWindowProcW, DestroyIcon, DispatchMessageW,
-    GetMessageW, LoadCursorW, PostQuitMessage, RegisterClassExW, TranslateMessage,
+    GetMessageW, LoadCursorW, PostMessageW, PostQuitMessage, RegisterClassExW, TranslateMessage,
     CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, HICON, ICONINFO, IDC_ARROW, MSG, WM_APP,
     WM_DESTROY, WM_LBUTTONDOWN, WM_RBUTTONDOWN, WNDCLASSEXW, WS_EX_TOOLWINDOW,
     WS_OVERLAPPEDWINDOW,
@@ -169,13 +169,15 @@ fn run_icon_updater(hwnd: HWND) {
         last_progress = progress;
         last_ready = ready;
 
-        // 완료 후엔 더 이상 갱신할 게 없음 — 스레드만 가볍게 idle 상태로 유지
         if ready {
-            info!("tray icon settled to ready state");
-            // 더 이상 폴링하지 않고 길게 잠. (메시지 펌프가 종료시 트레이 정리)
-            loop {
-                thread::sleep(Duration::from_secs(60));
+            info!("tray icon settled to ready state — signaling UI then exiting");
+            // 녹색 링을 3초간 표시 후 bootready-ui에 팝업 신호를 보내고 트레이 제거
+            thread::sleep(Duration::from_secs(3));
+            write_show_signal();
+            unsafe {
+                PostMessageW(hwnd, WM_DESTROY, WPARAM(0), LPARAM(0)).ok();
             }
+            return;
         }
     }
 }
@@ -248,22 +250,28 @@ fn write_show_signal() {
 }
 
 fn find_ui_exe() -> Option<std::path::PathBuf> {
-    if let Ok(current_exe) = std::env::current_exe() {
-        let sibling = current_exe.parent()?.join("bootready-ui.exe");
-        if sibling.exists() {
-            return Some(sibling);
+    // Tauri currentUser 설치 경로: %LOCALAPPDATA%\Programs\BootReady\BootReady.exe
+    if let Ok(localappdata) = std::env::var("LOCALAPPDATA") {
+        let path = std::path::PathBuf::from(localappdata)
+            .join("Programs")
+            .join("BootReady")
+            .join("BootReady.exe");
+        if path.exists() {
+            return Some(path);
         }
     }
-    which_bootready_ui()
-}
-
-fn which_bootready_ui() -> Option<std::path::PathBuf> {
-    std::env::var("PATH").ok().and_then(|path_var| {
-        path_var
-            .split(';')
-            .map(|dir| std::path::PathBuf::from(dir).join("bootready-ui.exe"))
-            .find(|p| p.exists())
-    })
+    // boot-core.exe와 같은 폴더 (개발/이전 구조 fallback)
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(parent) = current_exe.parent() {
+            for name in &["BootReady.exe", "bootready-ui.exe"] {
+                let sibling = parent.join(name);
+                if sibling.exists() {
+                    return Some(sibling);
+                }
+            }
+        }
+    }
+    None
 }
 
 unsafe fn add_tray_icon(hwnd: HWND, icon: HICON, tip: &str) {

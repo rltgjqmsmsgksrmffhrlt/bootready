@@ -3,12 +3,30 @@
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::os::windows::process::CommandExt;
 use tauri::{AppHandle, Emitter, Manager};
 use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 
 static FORCE_QUIT: AtomicBool = AtomicBool::new(false);
+static LAST_SHOWN_MS: AtomicI64 = AtomicI64::new(0);
+
+fn mark_shown() {
+    let ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    LAST_SHOWN_MS.store(ms, Ordering::Relaxed);
+}
+
+fn recently_shown() -> bool {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    now - LAST_SHOWN_MS.load(Ordering::Relaxed) < 400
+}
 
 // ── Data types ────────────────────────────────────────────────────────────────
 
@@ -332,14 +350,12 @@ fn position_bottom_right(win: &tauri::WebviewWindow) {
 fn ensure_boot_core(app: &tauri::App) {
     let dest = appdata_dir().join("boot-core.exe");
 
-    // Copy boot-core.exe from bundle resources if not present
-    if !dest.exists() {
-        if let Ok(src) = app.path().resource_dir() {
-            let src = src.join("boot-core.exe");
-            if src.exists() {
-                std::fs::create_dir_all(&appdata_dir()).ok();
-                std::fs::copy(&src, &dest).ok();
-            }
+    // Always try to update boot-core.exe from bundle (ignore errors if file is in use)
+    if let Ok(src) = app.path().resource_dir() {
+        let src = src.join("boot-core.exe");
+        if src.exists() {
+            std::fs::create_dir_all(&appdata_dir()).ok();
+            std::fs::copy(&src, &dest).ok();
         }
     }
 
@@ -387,6 +403,7 @@ fn start_signal_watcher(app: AppHandle) {
         if sig.exists() {
             let _ = std::fs::remove_file(&sig);
             if let Some(win) = app.get_webview_window("main") {
+                mark_shown();
                 position_bottom_right(&win);
                 let _ = win.show();
                 let _ = win.set_focus();
@@ -438,6 +455,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
             if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
                 let app = tray.app_handle();
                 if let Some(win) = app.get_webview_window("main") {
+                    mark_shown();
                     position_bottom_right(&win);
                     let _ = win.show();
                     let _ = win.set_focus();
@@ -447,6 +465,7 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => {
                 if let Some(win) = app.get_webview_window("main") {
+                    mark_shown();
                     position_bottom_right(&win);
                     let _ = win.show();
                     let _ = win.set_focus();
@@ -465,8 +484,8 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            // 이미 실행 중이면 기존 창 포커스
             if let Some(win) = app.get_webview_window("main") {
+                mark_shown();
                 position_bottom_right(&win);
                 let _ = win.show();
                 let _ = win.set_focus();
@@ -488,11 +507,13 @@ fn main() {
         .setup(|app| {
             let win = app.get_webview_window("main").expect("no main window");
 
-            // Hide on focus lost
+            // Hide on focus lost — debounced to avoid race with show/set_focus
             let win_clone = win.clone();
             win.on_window_event(move |event| {
                 if let tauri::WindowEvent::Focused(false) = event {
-                    let _ = win_clone.hide();
+                    if !recently_shown() {
+                        let _ = win_clone.hide();
+                    }
                 }
             });
 

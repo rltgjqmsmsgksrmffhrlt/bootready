@@ -141,7 +141,7 @@ export default function Settings({ onBack }: Props) {
 
         {/* 버전 정보 */}
         <Section title="정보">
-          <InfoRow label="버전" value="1.0.0" />
+          <InfoRow label="버전" value="1.0.1" />
           <InfoRow label="DB 위치" value="%APPDATA%\BootReady\data.db" mono />
           <InfoRow label="만든 사람" value="petit prin" />
         </Section>
