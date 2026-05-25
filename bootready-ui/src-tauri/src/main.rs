@@ -349,13 +349,21 @@ fn position_bottom_right(win: &tauri::WebviewWindow) {
 
 fn ensure_boot_core(app: &tauri::App) {
     let dest = appdata_dir().join("boot-core.exe");
+    std::fs::create_dir_all(&appdata_dir()).ok();
 
-    // Always try to update boot-core.exe from bundle (ignore errors if file is in use)
     if let Ok(src) = app.path().resource_dir() {
         let src = src.join("boot-core.exe");
         if src.exists() {
-            std::fs::create_dir_all(&appdata_dir()).ok();
-            std::fs::copy(&src, &dest).ok();
+            // Try to copy; if the file is locked (process running), kill it first then retry
+            if std::fs::copy(&src, &dest).is_err() {
+                std::process::Command::new("taskkill")
+                    .args(["/f", "/im", "boot-core.exe"])
+                    .creation_flags(0x08000000)
+                    .output()
+                    .ok();
+                std::thread::sleep(std::time::Duration::from_millis(800));
+                std::fs::copy(&src, &dest).ok();
+            }
         }
     }
 
