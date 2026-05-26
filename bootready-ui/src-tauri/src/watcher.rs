@@ -401,7 +401,7 @@ fn extract_exe_path(cmd: &str) -> String {
     }
 
     // 따옴표 없는 경우: 공백으로 분리된 토큰을 앞에서부터 누적하며
-    // 실제 파일이 존재하는 경로를 찾음 (예: C:\Users\Dongchan Kim\...\app.exe)
+    // 실제 파일이 존재하는 경로를 찾음 (예: C:\Program Files\App\app.exe --flag)
     if cmd.contains(' ') {
         let mut accumulated = String::new();
         for (i, token) in cmd.split(' ').enumerate() {
