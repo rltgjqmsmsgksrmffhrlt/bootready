@@ -393,14 +393,31 @@ fn startup_folder_paths() -> Vec<PathBuf> {
 fn extract_exe_path(cmd: &str) -> String {
     let cmd = cmd.trim();
     if cmd.starts_with('"') {
-        cmd.trim_start_matches('"')
+        return cmd.trim_start_matches('"')
             .split('"')
             .next()
             .unwrap_or(cmd)
-            .to_string()
-    } else {
-        cmd.split_whitespace().next().unwrap_or(cmd).to_string()
+            .to_string();
     }
+
+    // 따옴표 없는 경우: 공백으로 분리된 토큰을 앞에서부터 누적하며
+    // 실제 파일이 존재하는 경로를 찾음 (예: C:\Users\Dongchan Kim\...\app.exe)
+    if cmd.contains(' ') {
+        let mut accumulated = String::new();
+        for (i, token) in cmd.split(' ').enumerate() {
+            if i > 0 {
+                accumulated.push(' ');
+            }
+            accumulated.push_str(token);
+            if std::path::Path::new(&accumulated).is_file() {
+                return accumulated;
+            }
+        }
+        // 파일을 찾지 못하면 첫 토큰 (기존 동작)
+        return cmd.split_whitespace().next().unwrap_or(cmd).to_string();
+    }
+
+    cmd.to_string()
 }
 
 // ── Process snapshot ─────────────────────────────────────────────────────────
