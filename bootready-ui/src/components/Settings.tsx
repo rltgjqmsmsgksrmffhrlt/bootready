@@ -80,7 +80,7 @@ export default function Settings({ onBack }: Props) {
         <Section title="시작 설정">
           <ToggleRow
             label="Windows 시작 시 자동 실행"
-            hint="boot-core.exe를 시작프로그램으로 등록합니다"
+            hint="BootReady를 시작프로그램으로 등록합니다"
             value={settings.autostart}
             onChange={(v) => setSettings((s) => ({ ...s, autostart: v }))}
           />
@@ -141,7 +141,7 @@ export default function Settings({ onBack }: Props) {
 
         {/* 버전 정보 */}
         <Section title="정보">
-          <InfoRow label="버전" value="1.0.2" />
+          <InfoRow label="버전" value="1.1.0" />
           <InfoRow label="DB 위치" value="%APPDATA%\BootReady\data.db" mono />
           <InfoRow label="만든 사람" value="petit prin" />
         </Section>

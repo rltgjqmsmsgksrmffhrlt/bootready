@@ -1,13 +1,18 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod watcher;
+
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::os::windows::process::CommandExt;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 use winreg::{enums::HKEY_CURRENT_USER, RegKey};
+
+use crate::watcher::MonitorState;
 
 static FORCE_QUIT: AtomicBool = AtomicBool::new(false);
 static LAST_SHOWN_MS: AtomicI64 = AtomicI64::new(0);
@@ -67,15 +72,15 @@ pub struct BootStatus {
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
-fn appdata_dir() -> PathBuf {
+pub(crate) fn appdata_dir() -> PathBuf {
     PathBuf::from(std::env::var("APPDATA").unwrap_or_default()).join("BootReady")
 }
 
-fn db_path() -> PathBuf {
+pub(crate) fn db_path() -> PathBuf {
     appdata_dir().join("data.db")
 }
 
-fn config_path() -> PathBuf {
+pub(crate) fn config_path() -> PathBuf {
     appdata_dir().join("config.json")
 }
 
@@ -347,59 +352,54 @@ fn position_bottom_right(win: &tauri::WebviewWindow) {
     }
 }
 
-fn ensure_boot_core(app: &tauri::App) {
-    let dest = appdata_dir().join("boot-core.exe");
-    std::fs::create_dir_all(&appdata_dir()).ok();
+/// 이전 버전(1.0.x)의 boot-core 잔재 제거 — 별도 프로세스/스케줄러 작업/exe 파일.
+fn cleanup_legacy_boot_core() {
+    std::fs::create_dir_all(appdata_dir()).ok();
 
-    if let Ok(src) = app.path().resource_dir() {
-        let src = src.join("boot-core.exe");
-        if src.exists() {
-            // Try to copy; if the file is locked (process running), kill it first then retry
-            if std::fs::copy(&src, &dest).is_err() {
-                std::process::Command::new("taskkill")
-                    .args(["/f", "/im", "boot-core.exe"])
-                    .creation_flags(0x08000000)
-                    .output()
-                    .ok();
-                std::thread::sleep(std::time::Duration::from_millis(800));
-                std::fs::copy(&src, &dest).ok();
-            }
+    std::process::Command::new("schtasks")
+        .args(["/delete", "/tn", "BootReadyCore", "/f"])
+        .creation_flags(0x08000000)
+        .output()
+        .ok();
+
+    std::process::Command::new("taskkill")
+        .args(["/f", "/im", "boot-core.exe"])
+        .creation_flags(0x08000000)
+        .output()
+        .ok();
+
+    let _ = std::fs::remove_file(appdata_dir().join("boot-core.exe"));
+    let _ = std::fs::remove_file(signal_path());
+}
+
+/// 첫 실행 시 HKCU\Run에 BootReady.exe 등록. config.first_run_done 으로 한 번만.
+fn ensure_autostart_first_run() {
+    let cfg_path = config_path();
+    let mut json: serde_json::Value = std::fs::read_to_string(&cfg_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    if json.get("first_run_done").and_then(|v| v.as_bool()) == Some(true) {
+        return;
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        if let Ok(run) = hkcu.open_subkey_with_flags(
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            winreg::enums::KEY_SET_VALUE,
+        ) {
+            let _ = run.set_value("BootReady", &exe.to_string_lossy().as_ref());
         }
     }
 
-    // Register via Task Scheduler (starts earlier at logon than HKCU Run)
-    if dest.exists() {
-        let dest_str = dest.to_string_lossy();
-        let task_exists = std::process::Command::new("schtasks")
-            .args(["/query", "/tn", "BootReadyCore"])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        if !task_exists {
-            std::process::Command::new("schtasks")
-                .args([
-                    "/create",
-                    "/tn", "BootReadyCore",
-                    "/tr", dest_str.as_ref(),
-                    "/sc", "ONLOGON",
-                    "/delay", "0000:00",
-                    "/f",
-                ])
-                .creation_flags(0x08000000) // CREATE_NO_WINDOW
-                .spawn()
-                .ok();
-        }
-
-        // Launch boot-core if not running
-        let running = std::process::Command::new("tasklist")
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).contains("boot-core.exe"))
-            .unwrap_or(false);
-        if !running {
-            std::process::Command::new(&dest)
-                .spawn()
-                .ok();
-        }
+    json["first_run_done"] = serde_json::Value::Bool(true);
+    if let Some(parent) = cfg_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(content) = serde_json::to_string_pretty(&json) {
+        let _ = std::fs::write(&cfg_path, content);
     }
 }
 
@@ -420,28 +420,6 @@ fn start_signal_watcher(app: AppHandle) {
     });
 }
 
-fn start_session_watcher(app: AppHandle) {
-    std::thread::spawn(move || {
-        let mut last_id: Option<i64> = None;
-
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(5));
-
-            if let Ok(conn) = open_db() {
-                if let Ok(current_id) = conn.query_row(
-                    "SELECT id FROM boot_session ORDER BY id DESC LIMIT 1",
-                    [],
-                    |row| row.get::<_, i64>(0),
-                ) {
-                    if last_id.map_or(false, |prev| current_id > prev) {
-                        let _ = app.emit("session-updated", ());
-                    }
-                    last_id = Some(current_id);
-                }
-            }
-        }
-    });
-}
 
 // ── Tray ─────────────────────────────────────────────────────────────────────
 
@@ -528,15 +506,23 @@ fn main() {
             // Pre-position window before first show
             position_bottom_right(&win);
 
-            // Ensure boot-core is present and running
-            ensure_boot_core(app);
+            // Cleanup legacy boot-core artifacts (schtasks, exe, signal) from 1.0.x
+            cleanup_legacy_boot_core();
+
+            // Register BootReady.exe to HKCU\Run on first run so the tray persists
+            ensure_autostart_first_run();
 
             // Tray icon
             setup_tray(app)?;
 
-            // Background watchers
+            // Shared monitor state + startup watcher (replaces former boot-core process)
+            let monitor_state: Arc<Mutex<MonitorState>> =
+                Arc::new(Mutex::new(MonitorState::default()));
+            app.manage(monitor_state.clone());
+            watcher::spawn(app.handle().clone(), monitor_state);
+
+            // Show-signal watcher still works as an external popup trigger
             start_signal_watcher(app.handle().clone());
-            start_session_watcher(app.handle().clone());
 
             Ok(())
         })

@@ -1,7 +1,7 @@
 # BootReady — 프로젝트 가이드
 
 ## 버전 관리
-**현재 버전: 1.0.0**
+**현재 버전: 1.1.0**
 
 버전 변경 시 반드시 아래 4곳을 함께 수정:
 1. `bootready-ui/package.json` → `"version"`
@@ -26,10 +26,12 @@ gh release create v{version} \
   --title "BootReady v{version}" --latest
 ```
 
-## 아키텍처
+## 아키텍처 (1.1.0 이후)
 
-- **boot-core** (Rust): 부팅 시 시작프로그램 감시, SQLite 저장, Named Pipe IPC
-- **bootready-ui** (Tauri v2 + React): 팝업 UI, DB 직접 읽기, show.signal 감시, 트레이 아이콘
+단일 프로세스 (Tauri v2 + React):
+- `src-tauri/src/main.rs`: Tauri 커맨드, 트레이 아이콘, 자동시작 등록, show.signal 감시
+- `src-tauri/src/watcher.rs`: 백그라운드 스레드 — 시작프로그램 감시, SQLite 기록, 부팅 완료 시 URL 자동 열기 (uptime 가드 포함)
+- `legacy/boot-core/`: 1.0.x 까지 별도 프로세스였음. 1.1.0에서 흡수되어 폐기 (히스토리만 보존)
 
 ## 주요 경로 (런타임)
 

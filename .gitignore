@@ -1,6 +1,8 @@
 # Rust
 /boot-core/target/
 boot-core/**/*.pdb
+legacy/boot-core/target/
+legacy/boot-core/**/*.pdb
 bootready-ui/src-tauri/target/
 
 # Node / Tauri
