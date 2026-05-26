@@ -1,6 +1,6 @@
 {
   "name": "bootready-ui",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "BootReady UI — boot timeline and startup program viewer",
   "private": true,
   "scripts": {

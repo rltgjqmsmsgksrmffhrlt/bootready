@@ -435,13 +435,10 @@ fn ensure_autostart_first_run() {
 fn start_update_checker(app: AppHandle) {
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_secs(30));
-        loop {
-            if let Some(latest) = fetch_latest_version() {
-                if is_newer(&latest, CURRENT_VERSION) {
-                    let _ = app.emit("update-available", latest);
-                }
+        if let Some(latest) = fetch_latest_version() {
+            if is_newer(&latest, CURRENT_VERSION) {
+                let _ = app.emit("update-available", latest);
             }
-            std::thread::sleep(std::time::Duration::from_secs(12 * 3600));
         }
     });
 }
