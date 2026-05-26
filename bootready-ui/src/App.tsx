@@ -11,6 +11,7 @@ export default function App() {
   const [route, setRoute] = useState<Route>('popup')
   const [sessionData, setSessionData] = useState<SessionWithEvents | null>(null)
   const [loading, setLoading] = useState(true)
+  const [updateVersion, setUpdateVersion] = useState<string | null>(null)
 
   useEffect(() => {
     loadData()
@@ -21,8 +22,8 @@ export default function App() {
       else setRoute('popup')
     })
 
-    // 세션 완료 시 자동 갱신
     window.api?.onSessionUpdated?.(() => loadData())
+    window.api?.onUpdateAvailable?.((v) => setUpdateVersion(v))
   }, [])
 
   async function loadData() {
@@ -58,6 +59,7 @@ export default function App() {
       {route === 'popup' && (
         <TrayPopup
           sessionData={sessionData}
+          updateVersion={updateVersion}
           onOpenTimeline={() => setRoute('timeline')}
           onOpenSettings={() => setRoute('settings')}
           onOpenHistory={() => setRoute('history')}

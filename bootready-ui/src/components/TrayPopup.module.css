@@ -357,3 +357,27 @@
   background: var(--color-surface);
   color: var(--color-text-primary);
 }
+
+.updateBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 7px 14px;
+  background: color-mix(in srgb, #1d9e75 12%, var(--color-bg));
+  border-bottom: 1px solid color-mix(in srgb, #1d9e75 25%, transparent);
+  color: #1d9e75;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.updateBanner:hover {
+  background: color-mix(in srgb, #1d9e75 20%, var(--color-bg));
+}
+
+.updateBannerArrow {
+  font-size: 13px;
+  opacity: 0.7;
+}

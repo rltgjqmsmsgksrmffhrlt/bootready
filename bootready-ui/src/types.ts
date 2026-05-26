@@ -40,6 +40,7 @@ declare global {
       openTimeline: () => void
       onNavigate: (cb: (route: string) => void) => void
       onSessionUpdated: (cb: () => void) => void
+      onUpdateAvailable: (cb: (version: string) => void) => void
       getSessionById: (id: number) => Promise<SessionWithEvents | null>
       getAutostart: () => Promise<boolean>
       setAutostart: (enable: boolean) => Promise<boolean>
@@ -47,6 +48,7 @@ declare global {
       loadConfig: () => Promise<Record<string, unknown> | null>
       setWindowHeight: (h: number) => Promise<void>
       quitApp: () => Promise<void>
+      openReleasePage: () => Promise<void>
     }
   }
 }

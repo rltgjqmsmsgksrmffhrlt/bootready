@@ -4,6 +4,7 @@ import styles from './TrayPopup.module.css'
 
 interface Props {
   sessionData: SessionWithEvents | null
+  updateVersion: string | null
   onOpenTimeline: () => void
   onOpenSettings: () => void
   onOpenHistory: () => void
@@ -12,7 +13,7 @@ interface Props {
 
 type Filter = 'all' | 'slow' | 'failed'
 
-export default function TrayPopup({ sessionData, onOpenTimeline, onOpenSettings, onOpenHistory, onClose }: Props) {
+export default function TrayPopup({ sessionData, updateVersion, onOpenTimeline, onOpenSettings, onOpenHistory, onClose }: Props) {
   const session = sessionData?.session
   const events = sessionData?.events ?? []
   const [filter, setFilter] = useState<Filter>('all')
@@ -54,6 +55,17 @@ export default function TrayPopup({ sessionData, onOpenTimeline, onOpenSettings,
           <button className={`${styles.iconBtn} ${styles.iconBtnClose}`} onClick={onClose} title="닫기">✕</button>
         </div>
       </div>
+
+      {/* 업데이트 배너 */}
+      {updateVersion && (
+        <button
+          className={styles.updateBanner}
+          onClick={() => window.api?.openReleasePage?.()}
+        >
+          <span>🔄 v{updateVersion} 업데이트 사용 가능</span>
+          <span className={styles.updateBannerArrow}>→</span>
+        </button>
+      )}
 
       {/* 요약 */}
       <div className={styles.summary}>

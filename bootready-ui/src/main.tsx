@@ -19,12 +19,14 @@ async function setup() {
       openTimeline: () => invoke('open_timeline'),
       onNavigate: (cb) => { listen<string>('navigate', e => cb(e.payload)) },
       onSessionUpdated: (cb) => { listen('session-updated', () => cb()) },
+      onUpdateAvailable: (cb) => { listen<string>('update-available', e => cb(e.payload)) },
       getAutostart: () => invoke('get_autostart'),
       setAutostart: (enable) => invoke('set_autostart', { enable }),
       saveConfig: (config) => invoke('save_config', { config }),
       loadConfig: () => invoke('load_config'),
       setWindowHeight: (h) => invoke('set_window_height', { h }),
       quitApp: () => invoke('quit_app'),
+      openReleasePage: () => invoke('open_release_page'),
     }
   } else {
     // 브라우저 개발 환경 mock
@@ -54,12 +56,14 @@ async function setup() {
       openTimeline: () => {},
       onNavigate: () => {},
       onSessionUpdated: () => {},
+      onUpdateAvailable: () => {},
       getAutostart: () => Promise.resolve(true),
       setAutostart: () => Promise.resolve(true),
       saveConfig: () => Promise.resolve(true),
       loadConfig: () => Promise.resolve(null),
       setWindowHeight: () => Promise.resolve(),
       quitApp: () => Promise.resolve(),
+      openReleasePage: () => Promise.resolve(),
     }
   }
 

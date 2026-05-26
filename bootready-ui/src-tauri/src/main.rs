@@ -12,7 +12,14 @@ use std::os::windows::process::CommandExt;
 use tauri::{AppHandle, Manager};
 use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 
+use tauri::Emitter;
 use crate::watcher::MonitorState;
+
+const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+const GITHUB_RELEASES_URL: &str =
+    "https://github.com/rltgjqmsmsgksrmffhrlt/bootready/releases/latest";
+const GITHUB_API_LATEST: &str =
+    "https://api.github.com/repos/rltgjqmsmsgksrmffhrlt/bootready/releases/latest";
 
 static FORCE_QUIT: AtomicBool = AtomicBool::new(false);
 static LAST_SHOWN_MS: AtomicI64 = AtomicI64::new(0);
@@ -325,6 +332,26 @@ fn quit_app(_app: AppHandle) {
     std::process::exit(0);
 }
 
+#[tauri::command]
+fn open_release_page() {
+    use windows::core::HSTRING;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    let op = HSTRING::from("open");
+    let url = HSTRING::from(GITHUB_RELEASES_URL);
+    unsafe {
+        ShellExecuteW(
+            HWND(std::ptr::null_mut()),
+            windows::core::PCWSTR(op.as_ptr()),
+            windows::core::PCWSTR(url.as_ptr()),
+            windows::core::PCWSTR::null(),
+            windows::core::PCWSTR::null(),
+            SW_SHOWNORMAL,
+        );
+    }
+}
+
 // ── Background tasks ──────────────────────────────────────────────────────────
 
 fn position_bottom_right(win: &tauri::WebviewWindow) {
@@ -401,6 +428,41 @@ fn ensure_autostart_first_run() {
     if let Ok(content) = serde_json::to_string_pretty(&json) {
         let _ = std::fs::write(&cfg_path, content);
     }
+}
+
+/// GitHub Releases API로 최신 버전 확인. 새 버전이면 "update-available" 이벤트 emit.
+/// 앱 시작 30초 후 1회, 이후 12시간마다 반복.
+fn start_update_checker(app: AppHandle) {
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        loop {
+            if let Some(latest) = fetch_latest_version() {
+                if is_newer(&latest, CURRENT_VERSION) {
+                    let _ = app.emit("update-available", latest);
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_secs(12 * 3600));
+        }
+    });
+}
+
+fn fetch_latest_version() -> Option<String> {
+    let response = ureq::get(GITHUB_API_LATEST)
+        .set("User-Agent", "BootReady")
+        .call()
+        .ok()?;
+    let json: serde_json::Value = response.into_json().ok()?;
+    let tag = json.get("tag_name")?.as_str()?;
+    Some(tag.trim_start_matches('v').to_string())
+}
+
+/// "1.2.0" > "1.1.1" 처럼 semver 숫자 비교 (major.minor.patch 형식 가정).
+fn is_newer(latest: &str, current: &str) -> bool {
+    let parse = |s: &str| -> (u32, u32, u32) {
+        let mut parts = s.splitn(3, '.').map(|p| p.parse::<u32>().unwrap_or(0));
+        (parts.next().unwrap_or(0), parts.next().unwrap_or(0), parts.next().unwrap_or(0))
+    };
+    parse(latest) > parse(current)
 }
 
 fn start_signal_watcher(app: AppHandle) {
@@ -489,6 +551,7 @@ fn main() {
             save_config,
             load_config,
             quit_app,
+            open_release_page,
         ])
         .setup(|app| {
             let win = app.get_webview_window("main").expect("no main window");
@@ -523,6 +586,9 @@ fn main() {
 
             // Show-signal watcher still works as an external popup trigger
             start_signal_watcher(app.handle().clone());
+
+            // Update checker — polls GitHub Releases in background
+            start_update_checker(app.handle().clone());
 
             Ok(())
         })
