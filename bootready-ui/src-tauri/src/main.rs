@@ -299,7 +299,22 @@ fn set_autostart(enable: bool) -> Result<bool, String> {
         run.set_value("BootReady", &exe.to_string_lossy().as_ref())
             .map_err(|e| e.to_string())?;
     } else {
-        run.delete_value("BootReady").map_err(|e| e.to_string())?;
+        // 이미 없으면 무시 — 사용자 의도는 "off"
+        let _ = run.delete_value("BootReady");
+    }
+
+    // 사용자 의도를 config에 기록 → ensure_autostart_synced가 다음 시작 시 참고
+    let cfg_path = config_path();
+    let mut json: serde_json::Value = std::fs::read_to_string(&cfg_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    json["autostart_disabled_by_user"] = serde_json::Value::Bool(!enable);
+    if let Some(parent) = cfg_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(content) = serde_json::to_string_pretty(&json) {
+        let _ = std::fs::write(&cfg_path, content);
     }
 
     Ok(enable)
@@ -379,7 +394,7 @@ fn position_bottom_right(win: &tauri::WebviewWindow) {
     }
 }
 
-/// 이전 버전(1.0.x)의 boot-core 잔재 제거 — 별도 프로세스/스케줄러 작업/exe 파일.
+/// 이전 버전(1.0.x)의 boot-core 잔재 제거 — 별도 프로세스/스케줄러 작업/exe 파일/Run 키.
 fn cleanup_legacy_boot_core() {
     std::fs::create_dir_all(appdata_dir()).ok();
 
@@ -397,37 +412,46 @@ fn cleanup_legacy_boot_core() {
 
     let _ = std::fs::remove_file(appdata_dir().join("boot-core.exe"));
     let _ = std::fs::remove_file(signal_path());
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    if let Ok(run) = hkcu.open_subkey_with_flags(
+        r"Software\Microsoft\Windows\CurrentVersion\Run",
+        winreg::enums::KEY_SET_VALUE,
+    ) {
+        let _ = run.delete_value("BootReadyCore");
+    }
 }
 
-/// 첫 실행 시 HKCU\Run에 BootReady.exe 등록. config.first_run_done 으로 한 번만.
-fn ensure_autostart_first_run() {
+/// 매 시작 시 HKCU\Run\BootReady를 현재 exe로 동기화.
+/// 사용자가 Settings에서 명시적으로 끈 경우(config.autostart_disabled_by_user=true)에만 skip.
+/// → 키가 사라지거나 경로가 바뀌어도 다음 실행에서 자가복구.
+fn ensure_autostart_synced() {
     let cfg_path = config_path();
-    let mut json: serde_json::Value = std::fs::read_to_string(&cfg_path)
+    let json: serde_json::Value = std::fs::read_to_string(&cfg_path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_else(|| serde_json::json!({}));
 
-    if json.get("first_run_done").and_then(|v| v.as_bool()) == Some(true) {
+    if json.get("autostart_disabled_by_user").and_then(|v| v.as_bool()) == Some(true) {
         return;
     }
 
-    if let Ok(exe) = std::env::current_exe() {
-        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        if let Ok(run) = hkcu.open_subkey_with_flags(
-            r"Software\Microsoft\Windows\CurrentVersion\Run",
-            winreg::enums::KEY_SET_VALUE,
-        ) {
-            let _ = run.set_value("BootReady", &exe.to_string_lossy().as_ref());
+    let Ok(exe) = std::env::current_exe() else { return };
+    let exe_str = exe.to_string_lossy().to_string();
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let Ok(run) = hkcu.open_subkey_with_flags(
+        r"Software\Microsoft\Windows\CurrentVersion\Run",
+        winreg::enums::KEY_READ | winreg::enums::KEY_SET_VALUE,
+    ) else { return };
+
+    if let Ok(existing) = run.get_value::<String, _>("BootReady") {
+        if existing == exe_str {
+            return;
         }
     }
 
-    json["first_run_done"] = serde_json::Value::Bool(true);
-    if let Some(parent) = cfg_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Ok(content) = serde_json::to_string_pretty(&json) {
-        let _ = std::fs::write(&cfg_path, content);
-    }
+    let _ = run.set_value("BootReady", &exe_str.as_str());
 }
 
 /// GitHub Releases API로 최신 버전 확인. 새 버전이면 "update-available" 이벤트 emit.
@@ -569,8 +593,8 @@ fn main() {
             // Cleanup legacy boot-core artifacts (schtasks, exe, signal) from 1.0.x
             cleanup_legacy_boot_core();
 
-            // Register BootReady.exe to HKCU\Run on first run so the tray persists
-            ensure_autostart_first_run();
+            // Keep HKCU\Run\BootReady in sync with current exe (unless user opted out)
+            ensure_autostart_synced();
 
             // Tray icon
             setup_tray(app)?;
