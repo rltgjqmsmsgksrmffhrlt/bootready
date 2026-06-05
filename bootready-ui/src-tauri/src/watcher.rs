@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
-use windows::core::{HSTRING, PCWSTR};
-use windows::Win32::Foundation::{CloseHandle, ERROR_NO_MORE_ITEMS, HWND};
+use windows::core::{HSTRING, PCWSTR, PWSTR};
+use windows::Win32::Foundation::{CloseHandle, ERROR_NO_MORE_ITEMS, FILETIME, HANDLE, HWND};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
     TH32CS_SNAPPROCESS,
@@ -20,7 +20,10 @@ use windows::Win32::System::Registry::{
     RegCloseKey, RegEnumValueW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE,
     KEY_READ, REG_SZ,
 };
-use windows::Win32::System::SystemInformation::GetTickCount64;
+use windows::Win32::System::RemoteDesktop::{
+    WTSFreeMemory, WTSLogonTime, WTSQuerySessionInformationW, WTS_CURRENT_SESSION,
+};
+use windows::Win32::System::SystemInformation::GetSystemTimeAsFileTime;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
@@ -212,7 +215,8 @@ fn should_show_popup(entry_count: usize, initial_running_count: usize) -> bool {
 
 /// URL을 여는 조건 — 진짜 부팅 직후라고 판단될 때만.
 /// 1) 시작프로그램이 1개 이상이어야 함 (의미 있는 부팅 감지)
-/// 2) 시스템 uptime이 임계값 안 (사용자가 한참 뒤에 실행한 게 아닌)
+/// 2) 사용자 로그온 후 임계값 안 (사용자가 한참 뒤에 실행한 게 아닌).
+///    GetTickCount64는 Fast Startup에서 리셋되지 않으므로 WTS 세션 연결 시각 사용.
 /// 3) 첫 폴링에서 절반 이상이 이미 실행 중이 아니어야 함 (즉, 늦게 시작된 게 아님)
 fn should_open_urls(entry_count: usize, initial_running_count: usize) -> bool {
     if entry_count == 0 {
@@ -220,16 +224,59 @@ fn should_open_urls(entry_count: usize, initial_running_count: usize) -> bool {
     }
 
     const REAL_BOOT_WINDOW_MS: u64 = 10 * 60 * 1000; // 10 minutes
-    let uptime_ms = unsafe { GetTickCount64() };
-    if uptime_ms > REAL_BOOT_WINDOW_MS {
-        return false;
+    if let Some(session_uptime_ms) = user_session_uptime_ms() {
+        if session_uptime_ms > REAL_BOOT_WINDOW_MS {
+            return false;
+        }
     }
+    // WTS 조회 실패 시엔 가드 ③에 맡기고 통과시킴.
 
     if initial_running_count * 2 >= entry_count {
         return false;
     }
 
     true
+}
+
+/// 현재 사용자 세션이 로그온된 후 경과 시간(ms).
+/// Fast Startup 환경에서도 로그온은 새로 발생하므로 정확히 reset 됨.
+fn user_session_uptime_ms() -> Option<u64> {
+    unsafe {
+        let mut buffer: PWSTR = PWSTR::null();
+        let mut bytes_returned: u32 = 0;
+        WTSQuerySessionInformationW(
+            HANDLE(std::ptr::null_mut()), // WTS_CURRENT_SERVER_HANDLE
+            WTS_CURRENT_SESSION,
+            WTSLogonTime,
+            &mut buffer,
+            &mut bytes_returned,
+        )
+        .ok()?;
+
+        if buffer.0.is_null() || (bytes_returned as usize) < std::mem::size_of::<i64>() {
+            if !buffer.0.is_null() {
+                WTSFreeMemory(buffer.0 as *mut _);
+            }
+            return None;
+        }
+
+        let logon_ft: i64 = std::ptr::read_unaligned(buffer.0 as *const i64);
+        WTSFreeMemory(buffer.0 as *mut _);
+
+        if logon_ft <= 0 {
+            return None;
+        }
+
+        let now_ft: FILETIME = GetSystemTimeAsFileTime();
+        let now_100ns: i64 = ((now_ft.dwHighDateTime as i64) << 32)
+            | (now_ft.dwLowDateTime as i64 & 0xFFFF_FFFF);
+
+        if now_100ns <= logon_ft {
+            return Some(0);
+        }
+        // 100-ns intervals → ms
+        Some(((now_100ns - logon_ft) / 10_000) as u64)
+    }
 }
 
 // ── Startup entries ──────────────────────────────────────────────────────────
