@@ -48,6 +48,7 @@ pub struct BootSession {
     pub started_at: String,
     pub completed_at: Option<String>,
     pub total_duration_ms: Option<i64>,
+    pub settled_duration_ms: Option<i64>,
     pub score: Option<i64>,
 }
 
@@ -74,6 +75,7 @@ pub struct BootStatus {
     pub total_programs: i64,
     pub active_programs: i64,
     pub total_ms: Option<i64>,
+    pub settled_ms: Option<i64>,
     pub score: Option<i64>,
 }
 
@@ -106,7 +108,7 @@ fn get_latest_session() -> Result<Option<SessionWithEvents>, String> {
     let conn = open_db()?;
 
     let session = conn.query_row(
-        "SELECT id, started_at, completed_at, total_duration_ms, score \
+        "SELECT id, started_at, completed_at, total_duration_ms, settled_duration_ms, score \
          FROM boot_session ORDER BY id DESC LIMIT 1",
         [],
         |row| {
@@ -115,7 +117,8 @@ fn get_latest_session() -> Result<Option<SessionWithEvents>, String> {
                 started_at: row.get(1)?,
                 completed_at: row.get(2)?,
                 total_duration_ms: row.get(3)?,
-                score: row.get(4)?,
+                settled_duration_ms: row.get(4)?,
+                score: row.get(5)?,
             })
         },
     );
@@ -135,19 +138,20 @@ fn get_boot_status() -> Result<BootStatus, String> {
     let conn = open_db()?;
 
     let result = conn.query_row(
-        "SELECT id, total_duration_ms, score FROM boot_session ORDER BY id DESC LIMIT 1",
+        "SELECT id, total_duration_ms, settled_duration_ms, score FROM boot_session ORDER BY id DESC LIMIT 1",
         [],
         |row| {
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, Option<i64>>(1)?,
                 row.get::<_, Option<i64>>(2)?,
+                row.get::<_, Option<i64>>(3)?,
             ))
         },
     );
 
     match result {
-        Ok((session_id, total_ms, score)) => {
+        Ok((session_id, total_ms, settled_ms, score)) => {
             let count: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM program_event WHERE session_id = ?",
@@ -160,6 +164,7 @@ fn get_boot_status() -> Result<BootStatus, String> {
                 total_programs: count,
                 active_programs: count,
                 total_ms,
+                settled_ms,
                 score,
             })
         }
@@ -168,6 +173,7 @@ fn get_boot_status() -> Result<BootStatus, String> {
             total_programs: 0,
             active_programs: 0,
             total_ms: None,
+            settled_ms: None,
             score: None,
         }),
     }
@@ -180,7 +186,7 @@ fn get_recent_sessions(limit: Option<i64>) -> Result<Vec<BootSession>, String> {
 
     let mut stmt = conn
         .prepare(
-            "SELECT id, started_at, completed_at, total_duration_ms, score \
+            "SELECT id, started_at, completed_at, total_duration_ms, settled_duration_ms, score \
              FROM boot_session ORDER BY id DESC LIMIT ?",
         )
         .map_err(|e| e.to_string())?;
@@ -192,7 +198,8 @@ fn get_recent_sessions(limit: Option<i64>) -> Result<Vec<BootSession>, String> {
                 started_at: row.get(1)?,
                 completed_at: row.get(2)?,
                 total_duration_ms: row.get(3)?,
-                score: row.get(4)?,
+                settled_duration_ms: row.get(4)?,
+                score: row.get(5)?,
             })
         })
         .map_err(|e| e.to_string())?
@@ -207,7 +214,7 @@ fn get_session_by_id(id: i64) -> Result<Option<SessionWithEvents>, String> {
     let conn = open_db()?;
 
     let session = conn.query_row(
-        "SELECT id, started_at, completed_at, total_duration_ms, score \
+        "SELECT id, started_at, completed_at, total_duration_ms, settled_duration_ms, score \
          FROM boot_session WHERE id = ?",
         [id],
         |row| {
@@ -216,7 +223,8 @@ fn get_session_by_id(id: i64) -> Result<Option<SessionWithEvents>, String> {
                 started_at: row.get(1)?,
                 completed_at: row.get(2)?,
                 total_duration_ms: row.get(3)?,
-                score: row.get(4)?,
+                settled_duration_ms: row.get(4)?,
+                score: row.get(5)?,
             })
         },
     );

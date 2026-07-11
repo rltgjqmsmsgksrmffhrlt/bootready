@@ -557,7 +557,14 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
          );
          CREATE INDEX IF NOT EXISTS idx_program_event_session ON program_event(session_id);",
     )
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+
+    // v1.3.0: settled_duration_ms 컬럼 추가 (이미 존재하면 무시)
+    let _ = conn.execute_batch(
+        "ALTER TABLE boot_session ADD COLUMN settled_duration_ms INTEGER;",
+    );
+
+    Ok(())
 }
 
 fn begin_session(conn: &mut Connection) -> Result<i64, String> {
@@ -577,6 +584,19 @@ fn complete_session(
     conn.execute(
         "UPDATE boot_session SET completed_at=?1, total_duration_ms=?2, score=?3 WHERE id=?4",
         params![now, total_ms, score, session_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn update_settled_duration(
+    conn: &Connection,
+    session_id: i64,
+    settled_ms: i64,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE boot_session SET settled_duration_ms=?1 WHERE id=?2",
+        params![settled_ms, session_id],
     )
     .map_err(|e| e.to_string())?;
     Ok(())
