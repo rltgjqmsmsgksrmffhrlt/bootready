@@ -20,10 +20,15 @@ use windows::Win32::System::Registry::{
     RegCloseKey, RegEnumValueW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE,
     KEY_READ, REG_SZ,
 };
+use windows::Win32::Storage::FileSystem::{
+    CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+};
+use windows::Win32::System::IO::DeviceIoControl;
 use windows::Win32::System::RemoteDesktop::{
     WTSFreeMemory, WTSLogonTime, WTSQuerySessionInformationW, WTS_CURRENT_SESSION,
 };
 use windows::Win32::System::SystemInformation::GetSystemTimeAsFileTime;
+use windows::Win32::System::Threading::GetSystemTimes;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
@@ -174,6 +179,8 @@ fn run(app: AppHandle, state: Arc<Mutex<MonitorState>>) -> Result<(), String> {
             break;
         }
     }
+
+    wait_for_settlement(&conn, session_id, boot_start, &app);
 
     Ok(())
 }
@@ -499,6 +506,182 @@ fn running_exe_names() -> Vec<String> {
         let _ = CloseHandle(snapshot);
     }
     names
+}
+
+// ── System resource monitoring ──────────────────────────────────────────────
+
+struct CpuSnapshot {
+    idle: u64,
+    kernel: u64,
+    user: u64,
+}
+
+fn filetime_to_u64(ft: &FILETIME) -> u64 {
+    ((ft.dwHighDateTime as u64) << 32) | (ft.dwLowDateTime as u64)
+}
+
+fn take_cpu_snapshot() -> Option<CpuSnapshot> {
+    let mut idle = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    unsafe {
+        GetSystemTimes(Some(&mut idle), Some(&mut kernel), Some(&mut user)).ok()?;
+    }
+    Some(CpuSnapshot {
+        idle: filetime_to_u64(&idle),
+        kernel: filetime_to_u64(&kernel),
+        user: filetime_to_u64(&user),
+    })
+}
+
+fn cpu_usage_percent(prev: &CpuSnapshot, curr: &CpuSnapshot) -> f64 {
+    let idle_delta = curr.idle.saturating_sub(prev.idle) as f64;
+    let kernel_delta = curr.kernel.saturating_sub(prev.kernel) as f64;
+    let user_delta = curr.user.saturating_sub(prev.user) as f64;
+    let total = kernel_delta + user_delta; // kernel includes idle
+    if total <= 0.0 {
+        return 0.0;
+    }
+    ((total - idle_delta) / total) * 100.0
+}
+
+#[repr(C)]
+#[allow(non_snake_case)]
+struct DiskPerformance {
+    BytesRead: i64,
+    BytesWritten: i64,
+    ReadTime: i64,
+    WriteTime: i64,
+    IdleTime: i64,
+    ReadCount: u32,
+    WriteCount: u32,
+    QueueDepth: u32,
+    SplitCount: u32,
+    QueryTime: i64,
+    StorageDeviceNumber: u32,
+    StorageManagerName: [u16; 8],
+}
+
+struct DiskSnapshot {
+    idle_time: i64,
+    query_time: i64,
+}
+
+const IOCTL_DISK_PERFORMANCE: u32 = 0x00070020;
+
+fn take_disk_snapshot() -> Option<DiskSnapshot> {
+    unsafe {
+        let path = HSTRING::from("\\\\.\\C:");
+        let handle = CreateFileW(
+            &path,
+            0, // no read/write access needed
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            None,
+            OPEN_EXISTING,
+            windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES(0),
+            HANDLE::default(),
+        )
+        .ok()?;
+
+        let mut perf = std::mem::zeroed::<DiskPerformance>();
+        let mut bytes_returned: u32 = 0;
+        let ok = DeviceIoControl(
+            handle,
+            IOCTL_DISK_PERFORMANCE,
+            None,
+            0,
+            Some(&mut perf as *mut _ as *mut _),
+            std::mem::size_of::<DiskPerformance>() as u32,
+            Some(&mut bytes_returned),
+            None,
+        );
+        let _ = CloseHandle(handle);
+        ok.ok()?;
+
+        Some(DiskSnapshot {
+            idle_time: perf.IdleTime,
+            query_time: perf.QueryTime,
+        })
+    }
+}
+
+fn disk_idle_percent(prev: &DiskSnapshot, curr: &DiskSnapshot) -> f64 {
+    let elapsed = (curr.query_time - prev.query_time) as f64;
+    if elapsed <= 0.0 {
+        return 100.0;
+    }
+    let idle_delta = (curr.idle_time - prev.idle_time) as f64;
+    (idle_delta / elapsed * 100.0).clamp(0.0, 100.0)
+}
+
+// ── Settlement detection ─────────────────────────────────────────────────────
+
+const SETTLE_CPU_THRESHOLD: f64 = 15.0;
+const SETTLE_DISK_IDLE_THRESHOLD: f64 = 80.0;
+const SETTLE_CONSECUTIVE_NEEDED: u32 = 6; // 6 * 500ms = 3 seconds
+const SETTLE_MAX_WAIT_SECS: u64 = 300;
+
+fn wait_for_settlement(
+    conn: &Connection,
+    session_id: i64,
+    boot_start: Instant,
+    app: &AppHandle,
+) {
+    let mut consecutive_idle: u32 = 0;
+    let settle_start = Instant::now();
+
+    let mut prev_cpu = match take_cpu_snapshot() {
+        Some(s) => s,
+        None => {
+            record_settlement(conn, session_id, boot_start.elapsed().as_millis() as i64, app);
+            return;
+        }
+    };
+    let mut prev_disk = take_disk_snapshot(); // None if disk monitoring unavailable — CPU-only fallback
+
+    loop {
+        std::thread::sleep(Duration::from_millis(500));
+
+        if settle_start.elapsed().as_secs() > SETTLE_MAX_WAIT_SECS {
+            record_settlement(conn, session_id, boot_start.elapsed().as_millis() as i64, app);
+            break;
+        }
+
+        let curr_cpu = match take_cpu_snapshot() {
+            Some(s) => s,
+            None => continue,
+        };
+        let cpu = cpu_usage_percent(&prev_cpu, &curr_cpu);
+        prev_cpu = curr_cpu;
+
+        let curr_disk = take_disk_snapshot();
+        let disk_ok = match (&prev_disk, &curr_disk) {
+            (Some(prev), Some(curr)) => {
+                let idle = disk_idle_percent(prev, curr);
+                idle >= SETTLE_DISK_IDLE_THRESHOLD
+            }
+            (None, _) | (_, None) => {
+                true // disk monitoring unavailable or lost — CPU-only
+            }
+        };
+        prev_disk = curr_disk;
+
+        if cpu < SETTLE_CPU_THRESHOLD && disk_ok {
+            consecutive_idle += 1;
+        } else {
+            consecutive_idle = 0;
+        }
+
+        if consecutive_idle >= SETTLE_CONSECUTIVE_NEEDED {
+            record_settlement(conn, session_id, boot_start.elapsed().as_millis() as i64, app);
+            break;
+        }
+    }
+}
+
+fn record_settlement(conn: &Connection, session_id: i64, settled_ms: i64, app: &AppHandle) {
+    let _ = update_settled_duration(conn, session_id, settled_ms);
+    let _ = app.emit("session-updated", ());
 }
 
 fn classify_status(duration_ms: i64) -> String {
