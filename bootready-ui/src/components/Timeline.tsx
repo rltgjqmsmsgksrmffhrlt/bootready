@@ -47,7 +47,7 @@ export default function Timeline({ sessionData, onBack }: Props) {
         <span className={styles.headerTitle}>부팅 타임라인</span>
         <span className={styles.headerSub}>
           {sessionData?.session
-            ? `총 ${formatDuration(totalMs)} · ${events.length}개 프로그램`
+            ? `부팅 ${formatDuration(totalMs)}${sessionData.session.settled_duration_ms != null ? ` · 안정화 ${formatDuration(sessionData.session.settled_duration_ms)}` : ''} · ${events.length}개 프로그램`
             : '데이터 없음'}
         </span>
       </div>

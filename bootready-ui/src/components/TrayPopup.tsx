@@ -109,8 +109,16 @@ export default function TrayPopup({ sessionData, updateVersion, onOpenTimeline, 
             {/* 3열 요약 */}
             <div className={styles.summaryRow}>
               <div className={styles.summaryItem}>
-                <span className={styles.summaryLabel}>총 부팅 시간</span>
-                <span className={styles.summaryValue}>{fmtMs(derivedTotalMs)}</span>
+                <span className={styles.summaryLabel}>부팅 시간</span>
+                <span className={styles.summaryValue}>
+                  {fmtMs(derivedTotalMs)}
+                  {session.settled_duration_ms != null && (
+                    <span className={styles.settledSuffix}> → {fmtMs(session.settled_duration_ms)}</span>
+                  )}
+                </span>
+                {session.settled_duration_ms != null && (
+                  <span className={styles.settledLabel}>안정화</span>
+                )}
               </div>
               <div className={styles.summaryItem}>
                 <span className={styles.summaryLabel}>시작프로그램</span>

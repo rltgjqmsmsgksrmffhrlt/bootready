@@ -3,6 +3,7 @@ export interface BootSession {
   started_at: string
   completed_at: string | null
   total_duration_ms: number | null
+  settled_duration_ms: number | null
   score: number | null
 }
 
@@ -26,6 +27,7 @@ export interface BootStatus {
   total_programs: number
   active_programs: number
   total_ms: number | null
+  settled_ms: number | null
   score: number | null
 }
 

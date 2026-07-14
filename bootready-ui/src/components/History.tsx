@@ -51,7 +51,12 @@ export default function History({ onBack, onSelectSession }: Props) {
               </div>
               <div className={styles.rowRight}>
                 {s.total_duration_ms != null && (
-                  <span className={styles.rowDur}>{fmtMs(s.total_duration_ms)}</span>
+                  <span className={styles.rowDur}>
+                    {fmtMs(s.total_duration_ms)}
+                    {s.settled_duration_ms != null && (
+                      <span className={styles.rowSettled}> → {fmtMs(s.settled_duration_ms)}</span>
+                    )}
+                  </span>
                 )}
                 {s.score != null && (
                   <span className={styles.rowScore} style={{ color: scoreColor(s.score) }}>

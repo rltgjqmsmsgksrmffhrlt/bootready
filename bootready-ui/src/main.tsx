@@ -36,6 +36,7 @@ async function setup() {
         started_at: new Date(Date.now() - 47_200).toISOString(),
         completed_at: new Date().toISOString(),
         total_duration_ms: 47_200,
+        settled_duration_ms: 23_000,
         score: 82,
       },
       events: [
@@ -49,7 +50,7 @@ async function setup() {
 
     ;(window as Window).api = {
       getLatestSession: () => Promise.resolve(mockSession),
-      getBootStatus: () => Promise.resolve({ is_complete: true, total_programs: 5, active_programs: 5, total_ms: 47200, score: 82 }),
+      getBootStatus: () => Promise.resolve({ is_complete: true, total_programs: 5, active_programs: 5, total_ms: 47200, settled_ms: 23000, score: 82 }),
       getRecentSessions: () => Promise.resolve([mockSession.session]),
       getSessionById: () => Promise.resolve(mockSession),
       closeWindow: () => {},
