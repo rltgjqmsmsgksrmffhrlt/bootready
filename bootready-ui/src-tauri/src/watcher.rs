@@ -25,7 +25,7 @@ use windows::Win32::Storage::FileSystem::{
 };
 use windows::Win32::System::IO::DeviceIoControl;
 use windows::Win32::System::RemoteDesktop::{
-    WTSFreeMemory, WTSLogonTime, WTSQuerySessionInformationW, WTS_CURRENT_SESSION,
+    WTSFreeMemory, WTSQuerySessionInformationW, WTSSessionInfo, WTSINFOW, WTS_CURRENT_SESSION,
 };
 use windows::Win32::System::SystemInformation::GetSystemTimeAsFileTime;
 use windows::Win32::System::Threading::GetSystemTimes;
@@ -221,22 +221,21 @@ fn should_show_popup(entry_count: usize, initial_running_count: usize) -> bool {
 }
 
 /// URL을 여는 조건 — 진짜 부팅 직후라고 판단될 때만.
-/// 1) 시작프로그램이 1개 이상이어야 함 (의미 있는 부팅 감지)
-/// 2) 사용자 로그온 후 임계값 안 (사용자가 한참 뒤에 실행한 게 아닌).
-///    GetTickCount64는 Fast Startup에서 리셋되지 않으므로 WTS 세션 연결 시각 사용.
-/// 3) 첫 폴링에서 절반 이상이 이미 실행 중이 아니어야 함 (즉, 늦게 시작된 게 아님)
+/// 사용자 로그온 시각을 알 수 있으면 그것만으로 판단: 로그온 후 임계값 안이면 부팅 직후.
+///   (GetTickCount64는 Fast Startup에서 리셋되지 않으므로 WTS 세션 로그온 시각 사용.)
+/// WTS 조회가 실패했을 때만 휴리스틱으로 대체:
+///   1) 시작프로그램이 1개 이상이어야 함
+///   2) 첫 폴링에서 절반 이상이 이미 실행 중이 아니어야 함 (즉, 늦게 시작된 게 아님)
+///   — 시작프로그램이 적은 PC(새 컴퓨터 등)에서는 2)가 거의 항상 걸리므로 기본 경로로 쓰지 않음.
 fn should_open_urls(entry_count: usize, initial_running_count: usize) -> bool {
+    const REAL_BOOT_WINDOW_MS: u64 = 10 * 60 * 1000; // 10 minutes
+    if let Some(session_uptime_ms) = user_session_uptime_ms() {
+        return session_uptime_ms <= REAL_BOOT_WINDOW_MS;
+    }
+
     if entry_count == 0 {
         return false;
     }
-
-    const REAL_BOOT_WINDOW_MS: u64 = 10 * 60 * 1000; // 10 minutes
-    if let Some(session_uptime_ms) = user_session_uptime_ms() {
-        if session_uptime_ms > REAL_BOOT_WINDOW_MS {
-            return false;
-        }
-    }
-    // WTS 조회 실패 시엔 가드 ③에 맡기고 통과시킴.
 
     if initial_running_count * 2 >= entry_count {
         return false;
@@ -247,6 +246,7 @@ fn should_open_urls(entry_count: usize, initial_running_count: usize) -> bool {
 
 /// 현재 사용자 세션이 로그온된 후 경과 시간(ms).
 /// Fast Startup 환경에서도 로그온은 새로 발생하므로 정확히 reset 됨.
+/// WTSLogonTime 클래스는 문서상 "사용되지 않음"이라 WTSSessionInfo(WTSINFOW.LogonTime) 사용.
 fn user_session_uptime_ms() -> Option<u64> {
     unsafe {
         let mut buffer: PWSTR = PWSTR::null();
@@ -254,20 +254,20 @@ fn user_session_uptime_ms() -> Option<u64> {
         WTSQuerySessionInformationW(
             HANDLE(std::ptr::null_mut()), // WTS_CURRENT_SERVER_HANDLE
             WTS_CURRENT_SESSION,
-            WTSLogonTime,
+            WTSSessionInfo,
             &mut buffer,
             &mut bytes_returned,
         )
         .ok()?;
 
-        if buffer.0.is_null() || (bytes_returned as usize) < std::mem::size_of::<i64>() {
+        if buffer.0.is_null() || (bytes_returned as usize) < std::mem::size_of::<WTSINFOW>() {
             if !buffer.0.is_null() {
                 WTSFreeMemory(buffer.0 as *mut _);
             }
             return None;
         }
 
-        let logon_ft: i64 = std::ptr::read_unaligned(buffer.0 as *const i64);
+        let logon_ft: i64 = std::ptr::read_unaligned(buffer.0 as *const WTSINFOW).LogonTime;
         WTSFreeMemory(buffer.0 as *mut _);
 
         if logon_ft <= 0 {
@@ -716,6 +716,13 @@ fn open_db() -> Result<Connection, String> {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     Connection::open(&p).map_err(|e| e.to_string())
+}
+
+/// DB 파일과 스키마를 미리 만들어 둠. 프론트 첫 조회가 watcher 스레드보다
+/// 먼저 도착해도 "no such table"이 나지 않도록 setup()에서 호출.
+pub fn prepare_db() -> Result<(), String> {
+    let conn = open_db()?;
+    init_schema(&conn)
 }
 
 fn init_schema(conn: &Connection) -> Result<(), String> {
