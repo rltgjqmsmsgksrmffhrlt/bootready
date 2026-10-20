@@ -334,7 +334,22 @@ fn save_config(config: serde_json::Value) -> Result<bool, String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let json = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
+    // 기존 config에 병합 — 프론트가 모르는 키(autostart_disabled_by_user 등)를 보존
+    let mut merged: serde_json::Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .filter(|v: &serde_json::Value| v.is_object())
+        .unwrap_or_else(|| serde_json::json!({}));
+    match config {
+        serde_json::Value::Object(incoming) => {
+            let obj = merged.as_object_mut().expect("merged is an object");
+            for (k, v) in incoming {
+                obj.insert(k, v);
+            }
+        }
+        other => merged = other,
+    }
+    let json = serde_json::to_string_pretty(&merged).map_err(|e| e.to_string())?;
     std::fs::write(&path, json).map_err(|e| e.to_string())?;
     Ok(true)
 }
