@@ -607,6 +607,11 @@ fn main() {
             // Tray icon
             setup_tray(app)?;
 
+            // Create DB schema before the frontend's first query (fresh install has no tables yet)
+            if let Err(e) = watcher::prepare_db() {
+                eprintln!("prepare_db error: {e}");
+            }
+
             // Shared monitor state + startup watcher (replaces former boot-core process)
             let monitor_state: Arc<Mutex<MonitorState>> =
                 Arc::new(Mutex::new(MonitorState::default()));

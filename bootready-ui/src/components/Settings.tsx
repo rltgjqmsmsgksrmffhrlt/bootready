@@ -24,6 +24,8 @@ export default function Settings({ onBack }: Props) {
   const [saved, setSaved] = useState(false)
   const [urlInput, setUrlInput] = useState('')
   const urlInputRef = useRef<HTMLInputElement>(null)
+  const [editingIndex, setEditingIndex] = useState<number | null>(null)
+  const [editInput, setEditInput] = useState('')
 
   useEffect(() => {
     async function load() {
@@ -52,18 +54,57 @@ export default function Settings({ onBack }: Props) {
     } catch {}
   }
 
+  // URL 목록은 변경 즉시 저장 — 기존 config를 읽어 startup_urls만 교체 (다른 키 보존).
+  // 연속 변경 시 저장 순서가 꼬이지 않도록 이전 저장이 끝난 뒤 실행.
+  const urlSaveChain = useRef<Promise<unknown>>(Promise.resolve())
+
+  function updateUrls(next: string[]) {
+    setSettings(s => ({ ...s, startupUrls: next }))
+    urlSaveChain.current = urlSaveChain.current.then(async () => {
+      try {
+        const config = await window.api?.loadConfig?.() ?? {}
+        await window.api?.saveConfig?.({ ...config, startup_urls: next })
+      } catch (e) {
+        console.error('failed to save startup urls:', e)
+      }
+    })
+  }
+
+  function normalizeUrl(raw: string): string | null {
+    const url = raw.trim()
+    if (!url) return null
+    return url.startsWith('http') ? url : `https://${url}`
+  }
+
   function addUrl() {
-    const url = urlInput.trim()
-    if (!url) return
-    const normalized = url.startsWith('http') ? url : `https://${url}`
+    const normalized = normalizeUrl(urlInput)
+    if (!normalized) return
     if (settings.startupUrls.includes(normalized)) return
-    setSettings(s => ({ ...s, startupUrls: [...s.startupUrls, normalized] }))
+    updateUrls([...settings.startupUrls, normalized])
     setUrlInput('')
     urlInputRef.current?.focus()
   }
 
   function removeUrl(i: number) {
-    setSettings(s => ({ ...s, startupUrls: s.startupUrls.filter((_, idx) => idx !== i) }))
+    if (editingIndex === i) setEditingIndex(null)
+    updateUrls(settings.startupUrls.filter((_, idx) => idx !== i))
+  }
+
+  function startEdit(i: number) {
+    setEditingIndex(i)
+    setEditInput(settings.startupUrls[i])
+  }
+
+  function commitEdit() {
+    if (editingIndex === null) return
+    const normalized = normalizeUrl(editInput)
+    if (!normalized) return
+    const duplicate = settings.startupUrls.some((u, idx) => idx !== editingIndex && u === normalized)
+    if (duplicate) return
+    if (normalized !== settings.startupUrls[editingIndex]) {
+      updateUrls(settings.startupUrls.map((u, idx) => (idx === editingIndex ? normalized : u)))
+    }
+    setEditingIndex(null)
   }
 
   return (
@@ -89,13 +130,34 @@ export default function Settings({ onBack }: Props) {
         {/* 부팅 완료 시 열 URL */}
         <Section title="부팅 완료 시 열 URL">
           <div className={styles.urlSection}>
-            <div className={styles.urlHint}>부팅이 완료되면 아래 URL을 브라우저로 자동으로 엽니다.</div>
+            <div className={styles.urlHint}>부팅이 완료되면 아래 URL을 브라우저로 자동으로 엽니다. 추가·수정·삭제는 바로 저장됩니다.</div>
             {settings.startupUrls.length > 0 && (
               <ul className={styles.urlList}>
                 {settings.startupUrls.map((url, i) => (
                   <li key={i} className={styles.urlItem}>
-                    <span className={styles.urlText} title={url}>{url}</span>
-                    <button className={styles.urlRemoveBtn} onClick={() => removeUrl(i)}>✕</button>
+                    {editingIndex === i ? (
+                      <>
+                        <input
+                          className={styles.urlEditInput}
+                          type="text"
+                          autoFocus
+                          value={editInput}
+                          onChange={e => setEditInput(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') commitEdit()
+                            else if (e.key === 'Escape') setEditingIndex(null)
+                          }}
+                        />
+                        <button className={styles.urlEditBtn} onClick={commitEdit}>확인</button>
+                        <button className={styles.urlEditBtn} onClick={() => setEditingIndex(null)}>취소</button>
+                      </>
+                    ) : (
+                      <>
+                        <span className={styles.urlText} title={url}>{url}</span>
+                        <button className={styles.urlEditBtn} onClick={() => startEdit(i)} title="수정">수정</button>
+                        <button className={styles.urlRemoveBtn} onClick={() => removeUrl(i)} title="삭제">✕</button>
+                      </>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -141,7 +203,7 @@ export default function Settings({ onBack }: Props) {
 
         {/* 버전 정보 */}
         <Section title="정보">
-          <InfoRow label="버전" value="1.3.0" />
+          <InfoRow label="버전" value="1.3.1" />
           <InfoRow label="DB 위치" value="%APPDATA%\BootReady\data.db" mono />
           <InfoRow label="만든 사람" value="petit prin" />
         </Section>

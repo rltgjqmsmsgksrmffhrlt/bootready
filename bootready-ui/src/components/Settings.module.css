@@ -231,6 +231,32 @@
   color: var(--color-error);
 }
 
+.urlEditBtn {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  padding: 2px 4px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  transition: background 0.1s, color 0.1s;
+}
+
+.urlEditBtn:hover {
+  background: var(--color-surface-raised);
+  color: var(--color-accent);
+}
+
+.urlEditInput {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 6px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--color-text-primary);
+  outline: none;
+}
+
 .urlInputRow {
   display: flex;
   gap: 6px;
