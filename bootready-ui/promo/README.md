@@ -18,7 +18,7 @@ npx vite build --config promo/vite.config.ts # promo/dist (정적 서버로 열 
 - 3장(설정)과 4, 5장(팝업)은 실제 `App` / `Settings` / `TrayPopup` 컴포넌트를 iframe으로 그대로 렌더한다.
   바뀐 것은 `window.api` 대역(`mockApi.ts`) 뿐이다.
 - 3장에서 URL을 추가, 수정, 삭제하면 같은 저장소(localStorage)를 거쳐 4장에서 그대로 열린다(최대 3개까지만 그림).
-- 4장의 바탕화면과 브라우저 창은 연출이다. 로고 없이 글자만 쓰고, 주소는 예약 도메인(example.com)이다.
+- 4장의 바탕화면과 브라우저 창은 연출이다. 로고 없이 글자만 쓴다. 주소창에 보이는 두 주소(Chrome 웹 스토어의 확장 프로그램 페이지, netlify 사이트)는 실제 사용 중인 주소이고, 페이지 내용은 실제와 다르게 단순화해 그렸다.
 
 ## 알려진 차이와 확인 필요
 

@@ -3,11 +3,14 @@ import type { SessionWithEvents } from '../src/types'
 // 실제 앱의 config.json 자리. 설정 화면(iframe)과 부팅 시뮬레이션(캐러셀)이 같은 값을 읽는다.
 export const CONFIG_KEY = 'bootready-promo-config'
 
-// example.com 계열은 예약 도메인이라 실제 사이트와 겹치지 않는다.
+// 실제로 등록해 쓰는 주소 두 개(공유 추적 꼬리표 utm_source는 제거).
 const DEFAULT_CONFIG = {
   idleSeconds: 5,
   slowThresholdMs: 30000,
-  startup_urls: ['https://mail.example.com', 'https://dashboard.example.com'],
+  startup_urls: [
+    'https://chromewebstore.google.com/detail/notion-switcher/inbafaehomballlkcenijimmipjfikem',
+    'https://loquacious-biscuit-ceac87.netlify.app/',
+  ],
 }
 
 export function readConfig(): Record<string, unknown> {
