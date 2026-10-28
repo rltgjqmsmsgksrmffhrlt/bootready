@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__Figma__get_screenshot",
+      "mcp__Figma__get_figma_skill",
+      "mcp__Figma__use_figma"
+    ]
+  }
+}

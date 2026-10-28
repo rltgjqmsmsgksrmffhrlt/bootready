@@ -31,4 +31,7 @@ Thumbs.db
 *.user
 
 # Claude Code
-.claude/
+.claude/*
+!.claude/settings.json
+
+bootready-ui/promo/dist/
