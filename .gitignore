@@ -32,3 +32,5 @@ Thumbs.db
 
 # Claude Code
 .claude/
+
+bootready-ui/promo/dist/
