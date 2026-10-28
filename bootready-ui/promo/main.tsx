@@ -90,7 +90,7 @@ function S3() {
       <div className="demo clear" style={{ top: 405, height: 440 }}>
         <div style={{ position: 'absolute', left: 95, top: 0, width: 761, height: 440, overflow: 'hidden' }}>
           <div style={{ position: 'absolute', left: -19, top: -306 }}>
-            <AppFrame route="settings" scale={s} />
+            <AppFrame route="settings&crop=url" scale={s} />
           </div>
         </div>
       </div>
